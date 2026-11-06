@@ -230,6 +230,10 @@ def graph(sct, allegro):
         parsed["nets"] == parse_allegro(allegro),
         "Native export formats disagree about pin membership",
     )
+    return normalized_sct(parsed)
+
+
+def normalized_sct(parsed):
     return {
         "components": [
             {
@@ -252,16 +256,16 @@ def digest(value):
     ).hexdigest()
 
 
-def export_round(database, design, output_dir):
+def export_round(database, design, output_dir, *, _candidate_only=False):
     """Fixed installed read exporters, fresh outputs, no public executable/options."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     sdd = Path(os.environ["SDD_HOME"]).resolve(strict=True)
     texts, evidence = {}, {}
-    for name, filename in (
-        ("SctNetlist", "sct.txt"),
-        ("AllegroNetlist", "allegro.txt"),
-    ):
+    formats = [("SctNetlist", "sct.txt")]
+    if not _candidate_only:
+        formats.append(("AllegroNetlist", "allegro.txt"))
+    for name, filename in formats:
         executable = sdd / "wv/win32/bin" / (name + ".exe")
         source_sha = fingerprint(executable)
         path = output_dir / filename
@@ -292,15 +296,22 @@ def export_round(database, design, output_dir):
             ) from exc
         (output_dir / (name + "-stdout.txt")).write_bytes(r.stdout)
         (output_dir / (name + "-stderr.txt")).write_bytes(r.stderr)
-        if b"Design is not packaged!" in r.stdout + r.stderr:
+        unpackaged = b"Design is not packaged!" in r.stdout + r.stderr
+        if unpackaged and not _candidate_only:
             raise PadsError(
                 "logical_design_unpacked",
                 "Native logical export requires packaged components. This read tool does not package or assign pins; recover the pending component changes or explicitly prepare packaging before inspecting again.",
             )
         if (
             r.returncode != 0
-            or r.stdout.strip()
-            or r.stderr.strip()
+            or any(
+                stream.strip()
+                and not (
+                    _candidate_only
+                    and stream.strip() == b"Error: Design is not packaged!"
+                )
+                for stream in (r.stdout, r.stderr)
+            )
             or not path.is_file()
             or not 0 < path.stat().st_size <= 16 * 1024 * 1024
         ):
@@ -314,12 +325,17 @@ def export_round(database, design, output_dir):
         )
         texts[name] = path.read_bytes().decode("mbcs", errors="strict")
         evidence[name] = {
+            "unpackaged_candidate": unpackaged,
             "executable": str(executable),
             "executable_sha256": source_sha,
             "output": str(path),
             "output_sha256": fingerprint(path),
         }
-    value = graph(texts["SctNetlist"], texts["AllegroNetlist"])
+    value = (
+        normalized_sct(parse_sct(texts["SctNetlist"]))
+        if _candidate_only
+        else graph(texts["SctNetlist"], texts["AllegroNetlist"])
+    )
     return value, evidence
 
 

@@ -9,11 +9,11 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.6.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.7.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
 connectivity/electrical native profiles, and selected global/hierarchical pin checks
-using fresh native netlist exports with baseline comparison. There are 21 domain tools. Full ERC, PCB writes and library writes remain outside the verified scope.
+using fresh native netlist exports with baseline comparison. There are 23 domain tools. Full ERC, PCB writes and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
 
@@ -506,3 +506,64 @@ python pads/smoke_logical.py --server pads/server/target/debug/pads-automation.e
 See [P2 fifth acceptance](docs/p2e-acceptance.md). Annotated segment splitting,
 rotation, implicit library pin mapping and complete multi-unit handling remain
 separate increments before PCB write development.
+
+
+## Identity-preserving packaging (P2f)
+
+Two `edit` tools close the gap between an explicitly numbered reused placement
+and verified native logical connectivity:
+
+1. Before placing the component, call `inspect_pads_logical_connectivity` and retain
+   its `check_id` as the packaged design baseline.
+2. Preview and execute one reused, unconnected component placement. Retain that
+   placement's `preview_id` as `change_id`.
+3. Call `preview_pads_packaging` with `session_id`, `change_id`, and `baseline_id`.
+4. Inspect the proposed graph, fixed mode and protected-source evidence, then call
+   `execute_pads_packaging` with the returned packaging `preview_id` once.
+5. Use the **placement** change ID with `reopen_pads_schematic_change`, rebind,
+   inspect the logical graph/pins, and use the existing guarded placement recovery
+   followed by reopening to remove the unconnected test instance.
+
+The preview runs installed `wg/win32/bin/package.exe` with fixed `Add`, `NoFill`,
+`BAM-only` options and a private copy of `Integration/LocalPartsDB.pdb`. It writes
+auxiliary reports and a working PDB, so it is **not a file-preserving read**. Only
+an empty BAM assignment file is accepted: this increment cannot rename components,
+reassign physical pin numbers, clean-build a library or process arbitrary modes.
+The candidate graph must equal the prior logical baseline plus exactly the new
+unconnected component. New live pin numbers must already be explicit and unique.
+The tools do not fill implicit pin numbers or solve shared-unit mappings.
+
+An unpackaged SCT export can be used only as a labelled preflight candidate, with
+only its exact known unpackaged diagnostic allowed. Unpackaged Allegro exports
+fall back to different logic and are not used for this candidate. The public
+logical inspection tool continues to reject unpackaged designs. After packaging,
+**both** clean SCT and Allegro exports must agree and match the candidate exactly.
+A candidate is never recorded as a successful logical baseline.
+
+Execution revalidates the source fingerprints and live component identities,
+repeats BAM-only preflight and the candidate graph, then updates iCDB and checks
+fresh dual-format exports, the new live pins, operation-page state and protected
+files. The whole design's live component identities are compared; full live pin
+mapping and all-page geometry verification remain false/not claimed. Project and
+library paths stay inside the configured fixture. Additional project PDB search
+paths are refused. Protected files include the copied library tree, PCB tree,
+original PDBs and configuration files; working PDBs and logs stay in local evidence.
+
+Previews expire after 600 seconds and execute once. Failure after a possible write
+invalidates the session and retains evidence; unknown outcomes are not retried.
+The successful recovery removes the recorded unconnected component and verifies
+the original logical graph and recorded sheet. It is **semantic recovery**, not a
+byte-for-byte rollback of packager bookkeeping or generated auxiliary reports.
+Further edits make the original placement recovery stale and must be handled
+in order. Native packaging is not an atomic transaction, and other GUI edits are
+not locked out. Each packager has a 40-second limit within the existing
+180-second native worker / 270-second supervisor limits.
+
+Run the acceptance harness only on a prepared, configured and hosted test copy:
+
+```powershell
+python pads/smoke_packaging.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2f --fixture .pads-runtime/p2f/fixture
+```
+
+See [P2 sixth acceptance](docs/p2f-acceptance.md). Nonempty BAM changes, implicit
+library pin mappings, shared/hidden pins and full ERC remain separate work.

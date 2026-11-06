@@ -16,6 +16,11 @@ from runtime.schematic import Schematic
 
 
 def dispatch(name, args, sdd, state):
+    if name in ('preview_pads_packaging','execute_pads_packaging'):
+        from runtime.packaging import Packaging
+        service=Packaging(sdd,state)
+        if name=='preview_pads_packaging':return service.preview_packaging(args['session_id'],args['change_id'],args['baseline_id'])
+        return service.execute_packaging(args['preview_id'])
     if name in ('inspect_pads_sheet','preview_pads_schematic_change','execute_pads_schematic_change',
                 'preview_pads_schematic_recovery','reopen_pads_schematic_change','check_pads_schematic','inspect_pads_logical_connectivity'):
         service=Schematic(sdd,state)
@@ -66,6 +71,8 @@ def dispatch(name, args, sdd, state):
             junction_evidence=json.loads(junction_path.read_text(encoding='utf-8')) if junction_path.is_file() else None
             logical_path=state/'evidence'/f'p2e-acceptance-{domain}.json'
             logical_evidence=json.loads(logical_path.read_text(encoding='utf-8')) if logical_path.is_file() else None
+            packaging_path=state/'evidence'/f'p2f-acceptance-{domain}.json'
+            packaging_evidence=json.loads(packaging_path.read_text(encoding='utf-8')) if packaging_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -80,6 +87,8 @@ def dispatch(name, args, sdd, state):
                                  'recorded_junction_acceptance':junction_evidence,
                                  'selected_logical_connectivity_verified':bool(logical_evidence and logical_evidence.get('status')=='passed'),
                                  'recorded_logical_acceptance':logical_evidence,
+                                 'bounded_packaging_verified':bool(packaging_evidence and packaging_evidence.get('status')=='passed'),
+                                 'recorded_packaging_acceptance':packaging_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}

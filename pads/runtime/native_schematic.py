@@ -378,6 +378,10 @@ def operate(request):
                 )
         library_sha = fingerprint(Path(data.CentralLibraryPath))
         design, sheet = request["design"], request["sheet"]
+        if request["action"] in ("packaging_preview", "packaging_execute"):
+            from runtime.native_packaging import operate as package
+
+            return package(app, request, identity, initial)
         if request["action"] == "logical":
             from runtime.native_logical import inspect
 
