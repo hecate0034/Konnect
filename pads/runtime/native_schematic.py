@@ -171,11 +171,64 @@ def apply_connection(app, op):
     )
 
 
+def apply_route(app, prepared, identity, initial):
+    import pythoncom
+    from win32com.client import VARIANT
+
+    null = VARIANT(pythoncom.VT_DISPATCH, None)
+    points = prepared["route"]["points"]
+    existing = prepared["route"]["existing_net"]
+    if existing:
+        points = list(reversed(points))
+    uid = existing["uid"] if existing else None
+    for a, b in zip(points, points[1:]):
+        if identity() != initial:
+            raise PadsError(
+                "target_changed", "Target changed during route construction"
+            )
+        net = call(app.ActiveView.Block, "AddNet", *a, *b, null, null, 0)
+        actual_uid = str(net.UID)
+        if uid is not None and actual_uid != uid:
+            raise PadsError(
+                "readback_mismatch", "Native route changed the existing net identity"
+            )
+        uid = actual_uid
+
+
 def recover(app, original, observed):
     before = original["before"]
     op = original["operation"]
     kind = original["kind"]
-    if kind == "edit":
+    if kind == "route" and original["route"]["existing_net"]:
+        uid = original["route"]["existing_net"]["uid"]
+        prior = original["route"]["existing_net"]["segments"]
+        old_edges = {(tuple(s["a"]), tuple(s["b"])) for s in prior}
+        net = next(n for n in call(app.ActiveView, "Query", 32, 0) if str(n.UID) == uid)
+        block = net.Parent
+        call(block, "DeSelectAll")
+        segments = list(call(net, "GetSegments"))
+        for s in segments:
+            from runtime.native_geometry import point
+
+            edge = (
+                tuple(point(call(s, "Location", 0))),
+                tuple(point(call(s, "Location", 1))),
+            )
+            if edge not in old_edges:
+                call(net, "SelectSegment", s)
+        # Confirm selection is exactly the added segments before deleting anything.
+        for s in segments:
+            edge = (
+                tuple(point(call(s, "Location", 0))),
+                tuple(point(call(s, "Location", 1))),
+            )
+            if bool(call(net, "IsSegmentSelected", s)) != (edge not in old_edges):
+                raise PadsError(
+                    "recovery_unsafe",
+                    "Native segment selection differs from recovery plan",
+                )
+        call(block, "DeleteSelected", False)
+    elif kind == "edit":
         item = locate(app, op["target"])
         baseline = find_component(before, op["target"])
         if "attribute" in op["changes"]:
@@ -237,6 +290,15 @@ def recovery_allowed(original, observed):
         return
     except PadsError:
         pass
+    if original["kind"] == "route":
+        from runtime.routing import verify_route
+
+        for completed in range(1, len(original["route"]["points"]) - 1):
+            try:
+                verify_route(original, observed, completed)
+                return
+            except PadsError:
+                pass
     if original["kind"] == "edit" and set(original["operation"]["changes"]) == {
         "attribute",
         "position",
@@ -310,6 +372,26 @@ def operate(request):
         if identity() != initial:
             raise PadsError("target_changed", "Project changed while reading")
         action = request["action"]
+        if action == "check":
+            from runtime.electrical import native_connectivity, run_verify
+
+            connectivity = native_connectivity(app, current)
+            check = run_verify(
+                Path(request["expected_path"]), design, sheet, request["output_dir"]
+            )
+            if read_sheet(app, design, sheet) != current or identity() != initial:
+                raise PadsError(
+                    "check_changed_design",
+                    "Sheet or application changed during native verification",
+                )
+            return {
+                "ok": True,
+                "connectivity": connectivity,
+                "native_verify": check,
+                "geometry_issues": wire_issues(current["components"], current["nets"]),
+                "identity": initial,
+                "project_write_attempted": False,
+            }
         if action == "inspect":
             return {
                 "ok": True,
@@ -394,6 +476,8 @@ def operate(request):
                     apply_edit(app, request["plan"]["operation"])
                 elif request["plan"]["kind"] == "place":
                     apply_place(app, request["plan"])
+                elif request["plan"]["kind"] == "route":
+                    apply_route(app, request["plan"], identity, initial)
                 else:
                     apply_connection(app, request["plan"]["operation"])
         actual = read_sheet(app, design, sheet)

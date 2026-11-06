@@ -56,6 +56,8 @@ def normalize(sheet):
         if not c["target"]["refdes"]:
             c["attributes"] = [a for a in c["attributes"] if a["name"] != "@DATETIME"]
     result["components"] = canonical(result["components"])
+    for net in result["nets"]:
+        net["segments"] = canonical(net["segments"])
     result["nets"] = canonical(result["nets"])
     return result
 
@@ -68,6 +70,7 @@ def plan(sheet, operation):
         "edit": {"kind", "target", "changes"},
         "place": {"kind", "source", "position", "refdes"},
         "connect": {"kind", "a", "b"},
+        "route": {"kind", "a", "b", "points", "unit"},
     }
     if kind not in keys or set(operation) != keys[kind]:
         raise PadsError("invalid_operation", "Unknown operation or extra fields")
@@ -76,7 +79,11 @@ def plan(sheet, operation):
         "operation": copy.deepcopy(operation),
         "before": normalize(sheet),
     }
-    if kind == "edit":
+    if kind == "route":
+        from .routing import prepare_route
+
+        result["route"] = prepare_route(sheet, operation)
+    elif kind == "edit":
         changes = validate_changes(operation["changes"])
         original = find_component(sheet, operation["target"])
         expected = copy.deepcopy(sheet)
@@ -211,6 +218,10 @@ def plan(sheet, operation):
                 "route_unsupported",
                 "First connection increment requires one nonzero horizontal or vertical segment",
             )
+        from .routing import pin_exit
+
+        pin_exit(ca, a, end)
+        pin_exit(cb, b, start)
         if any(
             intersects(start, end, s["a"], s["b"])
             for n in sheet["nets"]
@@ -242,6 +253,11 @@ def verify_change(plan, actual):
     actual = normalize(actual)
     kind = plan["kind"]
     op = plan["operation"]
+    if kind == "route":
+        from .routing import verify_route
+
+        verify_route(plan, actual)
+        return
     if actual["design"] != before["design"] or actual["sheet"] != before["sheet"]:
         raise PadsError("readback_mismatch", "Sheet identity changed")
     if kind == "edit":

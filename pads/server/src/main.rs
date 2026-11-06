@@ -51,15 +51,19 @@ fn catalogue() -> Vec<Tool> {
             "x":{"type":"integer","minimum":0,"maximum":10000},"y":{"type":"integer","minimum":0,"maximum":10000},
             "unit":{"const":"0.01_inch"}}}}});
     let endpoint = json!({"type":"object","additionalProperties":false,"required":["target","pin_uid"],"properties":{"target":target,"pin_uid":{"type":"string","minLength":1,"maxLength":256}}});
+    let point = json!({"type":"array","minItems":2,"maxItems":2,"items":{"type":"integer","minimum":0,"maximum":10000}});
+    let net_endpoint = json!({"type":"object","additionalProperties":false,"required":["net_uid","net_name","point"],"properties":{"net_uid":{"type":"string","minLength":1,"maxLength":256},"net_name":{"type":"string","minLength":1,"maxLength":256},"point":point}});
     let operation = json!({"oneOf":[
         {"type":"object","additionalProperties":false,"required":["kind","target","changes"],"properties":{"kind":{"const":"edit"},"target":target,"changes":changes}},
         {"type":"object","additionalProperties":false,"required":["kind","source","position","refdes"],"properties":{"kind":{"const":"place"},"source":target,"position":changes["properties"]["position"],"refdes":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,31}$"}}},
-        {"type":"object","additionalProperties":false,"required":["kind","a","b"],"properties":{"kind":{"const":"connect"},"a":endpoint,"b":endpoint}}
+        {"type":"object","additionalProperties":false,"required":["kind","a","b"],"properties":{"kind":{"const":"connect"},"a":endpoint,"b":endpoint}},
+        {"type":"object","additionalProperties":false,"required":["kind","a","b","points","unit"],"properties":{"kind":{"const":"route"},"a":endpoint,"b":{"oneOf":[endpoint,net_endpoint]},"unit":{"const":"0.01_inch"},"points":{"type":"array","minItems":2,"maxItems":9,"items":point}}}
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("check_pads_schematic", "edit", "Read a bidirectionally verified single-sheet physical netlist and run three explicit native Verify checks (unconnected pins, dangling nets, net overlap). Optional baseline comparison. Test copies only; not full ERC or hierarchy verification.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"baseline_id":session}), json!(["session_id","design","sheet"])),
         tool("inspect_pads_sheet", "edit", "Read component/pin positions, instance attributes and all wire endpoints on one existing test-copy sheet. Reports pin endpoint gaps; not full ERC.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name}), json!(["session_id","design","sheet"])),
-        tool("preview_pads_schematic_change", "edit", "Preview one sheet-level edit, placement reusing an exact existing component, or a single straight wire between two free numbered pins. Test copies only. Rejects collisions and net merging.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
+        tool("preview_pads_schematic_change", "edit", "Preview an edit, reused placement, straight connection or explicit orthogonal route of up to eight segments. Routes may join an existing wire corner/solder joint while preserving its net identity. Test copies only; no net merging or interior segment splitting.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
         tool("execute_pads_schematic_change", "edit", "Consume a sheet change or recovery preview once, check entire recorded sheet state, execute and verify the exact geometry/connectivity delta. Native writes persist immediately.", json!({"preview_id":session}), json!(["preview_id"])),
         tool("preview_pads_schematic_recovery", "edit", "Preview reversing a recorded supported change only if the sheet still matches its observed result. Refuses overwriting later edits. Unknown outcomes require inspection.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
         tool("reopen_pads_schematic_change", "edit", "Close/reopen the configured test project after an executed sheet change or recovery and compare all recorded sheet geometry, properties and pin/net identities. Invalidates session.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
@@ -124,6 +128,7 @@ impl Worker {
         // Edit preflight and native operation each have a 60 s subprocess limit.
         // Do not kill their supervising worker before it can stop the native child.
         let timeout = if [
+            "check_pads_schematic",
             "inspect_pads_sheet",
             "preview_pads_schematic_change",
             "execute_pads_schematic_change",
@@ -214,7 +219,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.3.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.4.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -343,6 +348,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn route_and_check_schemas_bound_paths_and_reject_arbitrary_commands() {
+        let tools = catalogue();
+        let route = &tools
+            .iter()
+            .find(|t| t.name == "preview_pads_schematic_change")
+            .unwrap()
+            .validator;
+        let target = json!({"design":"d","sheet":"s","uid":"i","path":"i","refdes":"R1"});
+        let base = json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","operation":{
+            "kind":"route","a":{"target":target,"pin_uid":"p"},"b":{"net_uid":"n","net_name":"VDD","point":[10,20]},
+            "points":[[0,0],[0,20],[10,20]],"unit":"0.01_inch"}});
+        assert!(route.is_valid(&base));
+        let mut too_long = base.clone();
+        too_long["operation"]["points"] = json!(vec![vec![0, 0]; 10]);
+        assert!(!route.is_valid(&too_long));
+        let mut invalid_coordinate = base.clone();
+        invalid_coordinate["operation"]["points"][0][0] = json!(true);
+        assert!(!route.is_valid(&invalid_coordinate));
+        let check = &tools
+            .iter()
+            .find(|t| t.name == "check_pads_schematic")
+            .unwrap()
+            .validator;
+        assert!(!check.is_valid(
+            &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","command":"arbitrary"})
+        ));
+    }
     #[test]
     fn sheet_operations_require_explicit_sources_and_pin_identities() {
         let tools = catalogue();

@@ -154,3 +154,45 @@ def test_sheet_expiry_and_stale_preview_refuse_writes(sheet_context):
         result["error"]["kind"] == "stale_preview"
         and result["project_write_attempted"] is False
     )
+
+
+def test_native_check_baseline_is_scoped_and_failed_check_is_not_recorded(
+    sheet_context,
+):
+    from runtime.routing import netlist
+
+    service, sid, current, calls, _, _ = sheet_context
+
+    def runner(request):
+        calls.append(request)
+        return {
+            "ok": True,
+            "connectivity": netlist(current),
+            "native_verify": {
+                "input_sha256": {},
+                "profile_sha256": "rules",
+                "counts": {"errors": 0, "warnings": 1, "notes": 0},
+                "findings_text": "existing warning",
+            },
+        }
+
+    service.runner = runner
+    baseline = service.check_sheet(sid, "d", "s")
+    same = service.check_sheet(sid, "d", "s", baseline["check_id"])
+    assert (
+        same["comparison"]["netlist_equal"]
+        and same["comparison"]["native_findings_equal"]
+    )
+    count = len(calls)
+    expect(
+        "check_scope_mismatch",
+        lambda: service.check_sheet(sid, "d", "other", baseline["check_id"]),
+    )
+    assert len(calls) == count
+    service.runner = lambda request: {
+        "ok": False,
+        "error": {"kind": "native_check_timeout", "message": "timeout"},
+    }
+    expect("native_check_timeout", lambda: service.check_sheet(sid, "d", "s"))
+    with service.db() as db:
+        assert db.execute("SELECT count(*) FROM checks").fetchone()[0] == 2

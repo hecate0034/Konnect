@@ -44,6 +44,52 @@ class Schematic(Edits):
                 self.runner(self.base(session_id, design, sheet, "inspect"))
             )
 
+    def check_sheet(self, session_id, design, sheet, baseline_id=None):
+        from .electrical import compare_checks
+
+        with self.lock():
+            request = self.base(session_id, design, sheet, "check")
+            previous = None
+            with self.db() as db:
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS checks (id TEXT PRIMARY KEY, record TEXT NOT NULL)"
+                )
+                if baseline_id is not None:
+                    row = db.execute(
+                        "SELECT record FROM checks WHERE id=?", (baseline_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise PadsError(
+                            "check_not_found", "Recorded baseline check was not found"
+                        )
+                    previous = json.loads(row[0])
+                    self.same_scope(previous, request)
+                    if (previous["design"], previous["sheet"]) != (design, sheet):
+                        raise PadsError(
+                            "check_scope_mismatch", "Baseline belongs to another sheet"
+                        )
+            check_id = uuid.uuid4().hex
+            request["output_dir"] = str(
+                (self.state / "evidence" / ("check-" + check_id)).resolve()
+            )
+            result = self.checked(self.runner(request))
+            record = {
+                "check_id": check_id,
+                "project": request["expected_path"],
+                "policy_sha256": request["policy_sha256"],
+                "design": design,
+                "sheet": sheet,
+                **result,
+            }
+            if previous:
+                record["comparison"] = compare_checks(previous, record)
+                record["baseline_id"] = baseline_id
+            with self.db() as db:
+                db.execute(
+                    "INSERT INTO checks VALUES (?,?)", (check_id, json.dumps(record))
+                )
+            return record
+
     def insert(self, record):
         with self.db() as db:
             db.execute(

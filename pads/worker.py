@@ -17,8 +17,9 @@ from runtime.schematic import Schematic
 
 def dispatch(name, args, sdd, state):
     if name in ('inspect_pads_sheet','preview_pads_schematic_change','execute_pads_schematic_change',
-                'preview_pads_schematic_recovery','reopen_pads_schematic_change'):
+                'preview_pads_schematic_recovery','reopen_pads_schematic_change','check_pads_schematic'):
         service=Schematic(sdd,state)
+        if name=='check_pads_schematic':return service.check_sheet(args['session_id'],args['design'],args['sheet'],args.get('baseline_id'))
         if name=='inspect_pads_sheet':return service.inspect_sheet(args['session_id'],args['design'],args['sheet'])
         if name=='preview_pads_schematic_change':return service.preview_change(args['session_id'],args['design'],args['sheet'],args['operation'])
         if name=='execute_pads_schematic_change':return service.execute_change(args['preview_id'])
@@ -58,6 +59,8 @@ def dispatch(name, args, sdd, state):
             edit_passed = bool(edit_evidence and edit_evidence.get('status') == 'passed')
             sheet_path=state/'evidence'/f'p2b-acceptance-{domain}.json'
             sheet_evidence=json.loads(sheet_path.read_text(encoding='utf-8')) if sheet_path.is_file() else None
+            route_path=state/'evidence'/f'p2c-acceptance-{domain}.json'
+            route_evidence=json.loads(route_path.read_text(encoding='utf-8')) if route_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -66,6 +69,8 @@ def dispatch(name, args, sdd, state):
                                  'bounded_test_edit_verified': edit_passed,
                                  'bounded_sheet_change_verified':bool(sheet_evidence and sheet_evidence.get('status')=='passed'),
                                  'recorded_sheet_acceptance':sheet_evidence,
+                                 'bounded_routing_verified':bool(route_evidence and route_evidence.get('status')=='passed'),
+                                 'recorded_route_acceptance':route_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}

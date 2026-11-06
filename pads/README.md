@@ -9,6 +9,14 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
+Version 0.4.0 provides read-only project sessions and bounded Designer test-copy
+editing: property/position changes, reused component placement, straight and
+explicit multi-segment connections, existing-net branches, guarded recovery, and
+three native connectivity checks with baseline comparison. There are 20 domain
+tools. Full ERC, PCB writes and library writes remain outside the verified scope.
+
+## Installation diagnostics (P0)
+
 P0 supplies installation evidence, 32/64-bit registration inspection, actual
 type-library member discovery, and bounded 32-bit activation probes. Activation
 does not open a document or library and is **not** evidence that drawing, routing,
@@ -329,5 +337,82 @@ Wait for the fixture host to report `opened` before starting acceptance. Existin
 fixture/policy paths are not overwritten. The script restores its recorded baseline
 and verifies source files plus the copied library/PCB hashes. See
 [P2 second acceptance](docs/p2b-acceptance.md) for measured results and known limits.
-General multi-segment/existing-net connections and full P2 electrical validation,
-P3 PCB edits and P4 library writes remain pending.
+The next increment below adds bounded multi-segment routes and native checks.
+Full P2 electrical validation, P3 PCB edits and P4 library writes remain pending.
+
+## P2 third increment: explicit routes and native connectivity checks
+
+Version 0.4.0 adds a `route` operation to the existing preview/execute/recovery tools,
+plus `check_pads_schematic` (20 domain tools total). Existing `connect` retains its
+single-straight-segment contract. A route specifies every vertex, including endpoints:
+
+```json
+{
+  "kind": "route",
+  "a": {"target":{"design":"CORPORATE","sheet":"Powersupply","uid":"<source UID>","path":"<source path>","refdes":"C902"},"pin_uid":"<pin UID>"},
+  "b": {"net_uid":"<existing net UID>","net_name":"<exact net name>","point":[600,400]},
+  "points": [[800,300],[800,400],[600,400]],
+  "unit": "0.01_inch"
+}
+```
+
+Replace placeholders with inspected identities. Alternatively `b` can use the same
+`target`/`pin_uid` structure as `a`, for another free pin. Routes allow 1–8 nonzero
+orthogonal segments. Redundant collinear vertices, backtracking, self-intersection,
+unrelated pins/wires and component-body crossings are refused. The start pin must
+be free; this does not merge two existing nets. Existing-net anchors must already
+be wire corners or solder joints, not arbitrary points inside a segment or pin joints.
+Named nets require both the exact native UID and exact current name; no name-only lookup.
+Pin paths must leave perpendicular to one unambiguous component bounding-box edge;
+tangent departures, corner pins and pins inside the bounding box are refused because
+the native editor may otherwise insert an unrequested short detour. This guard also
+applies to the older straight `connect` operation.
+
+Execution begins at the existing net when extending it. Every segment must retain
+that net UID. Readback checks the exact expected segments, joint types and pin
+attachments, including all previously recorded state. Recovery removes only added
+segments and verifies restoration of the original joint types and connectivity.
+Observed exact construction prefixes can also be recovered; unrecognized partial
+states or unknown timeout outcomes remain non-retryable and require inspection.
+No general Undo command, whole-net replacement or automatic net renaming is used.
+
+`check_pads_schematic` requires `session_id`, `design` and `sheet`, with an optional
+`baseline_id` from an earlier successful check. It returns:
+
+- A local physical-net connection table, independently cross-checked through
+  component-to-net and native net-to-pin enumeration, plus unconnected pins.
+- Native `vdrc.exe` results for exactly three enabled checks: `UnconnectedPins`,
+  `ZeroPin` and `NetOverlap`. All other checks are disabled in this explicit profile.
+- Rule/executable fingerprints, raw local evidence, error/warning/note counts and
+  findings. `status=completed` means the checker finished, not that the circuit passed.
+  `profile_clean` refers only to this profile; `full_erc_verified` remains false.
+- With `baseline_id`, differences in physical net membership, unconnected pins,
+  native finding text and counts. Different sheets, fixtures or checker/rule
+  fingerprints cannot be compared as an equivalent baseline.
+
+The profile is generated under the state directory from installed definitions.
+Neither installation defaults nor the project's `Verify.ini` is changed. The older
+native checker distinguishes `-def` rule definitions from `-set` user overrides;
+the generated profile is passed as definitions, with fixed empty overrides. Native
+exit code zero alone is never treated as a successful check: a recognized complete
+summary is required. A native check has a 90-second timeout within the existing
+180-second native worker / 270-second supervisor limits. Checking verifies recorded
+sheet state before/after, but does not promise byte-identical native log files.
+
+Use a separate prepared/configured fixture, launch its Designer host, then run:
+
+```powershell
+python pads/smoke_routes.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2c --fixture .pads-runtime/p2c/fixture
+```
+
+Acceptance deliberately creates unconnected pins as a positive control for native
+checking, routes a three-segment net, adds a branch, extends an original named VDD
+net, verifies persistence, then reverses changes and compares final netlist/check
+results to the baseline. Existing baseline warnings are retained and reported.
+See [P2 third acceptance](docs/p2c-acceptance.md) for actual outcomes.
+
+This remains single-sheet physical connectivity: it does not flatten same-name
+global nets, hierarchy, hidden power pins or multi-unit packages. The three-check
+profile is not a full electrical-rule, power-driver, library-packaging or PCB sync
+verification. Interior segment splitting, cross-sheet routing and broader ERC
+remain work for subsequent P2 increments.
