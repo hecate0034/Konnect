@@ -61,6 +61,7 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("inspect_pads_logical_connectivity", "edit", "Read fresh native SCT/Allegro flattened package-pin netlists twice and corroborate 1-16 selected pins against live component instance paths. Reports logical connections/separations and optional baseline differences. Test copies only; no full ERC or hidden/multi-unit pin inference.", json!({"session_id":session,"design":sheet_name,"pins":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"object","additionalProperties":false,"required":["refdes","pin_number"],"properties":{"refdes":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,63}$"},"pin_number":{"type":"string","pattern":"^[A-Za-z0-9_+\\-]{1,64}$"}}}},"baseline_id":session}), json!(["session_id","design","pins"])),
         tool("check_pads_schematic", "edit", "Read a single-sheet physical netlist and run a connectivity or electrical native Verify profile on one sheet or all sheets of the root design. Reports cross-page same-name candidates without merging them. No hierarchy/full ERC claim. Test copies only.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"baseline_id":session,"profile":{"type":"string","enum":["connectivity","electrical"]},"scope":{"type":"string","enum":["sheet","design"]}}), json!(["session_id","design","sheet"])),
         tool("inspect_pads_sheet", "edit", "Read component/pin positions, instance attributes and all wire endpoints on one existing test-copy sheet. Reports pin endpoint gaps; not full ERC.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name}), json!(["session_id","design","sheet"])),
         tool("preview_pads_schematic_change", "edit", "Preview an edit, reused placement, straight connection or explicit orthogonal route of up to eight segments. Routes may join an existing wire corner/solder joint or one inspected unannotated segment interior while preserving its net identity. Test copies only; no net merging.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
@@ -129,6 +130,7 @@ impl Worker {
         // Do not kill their supervising worker before it can stop the native child.
         let timeout = if [
             "check_pads_schematic",
+            "inspect_pads_logical_connectivity",
             "inspect_pads_sheet",
             "preview_pads_schematic_change",
             "execute_pads_schematic_change",
@@ -219,7 +221,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.5.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.6.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -382,6 +384,30 @@ mod tests {
         assert!(!check.is_valid(
             &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","scope":"hierarchy"})
         ));
+    }
+    #[test]
+    fn logical_query_requires_bounded_exact_pins() {
+        let tools = catalogue();
+        let schema = &tools
+            .iter()
+            .find(|t| t.name == "inspect_pads_logical_connectivity")
+            .unwrap()
+            .validator;
+        let base = json!({"session_id":"a".repeat(32),"design":"d","pins":[{"refdes":"U1","pin_number":"A1"}]});
+        assert!(schema.is_valid(&base));
+        for pins in [
+            json!([]),
+            json!([{"refdes":"U1","pin_number":true}]),
+            json!([{"refdes":"U1","pin_number":"1","path":"arbitrary"}]),
+            json!([{"refdes":"U1","pin_number":"1"},{"refdes":"U1","pin_number":"1"}]),
+        ] {
+            let mut invalid = base.clone();
+            invalid["pins"] = pins;
+            assert!(!schema.is_valid(&invalid));
+        }
+        let mut invalid = base.clone();
+        invalid["executable"] = json!("arbitrary");
+        assert!(!schema.is_valid(&invalid));
     }
     #[test]
     fn sheet_operations_require_explicit_sources_and_pin_identities() {

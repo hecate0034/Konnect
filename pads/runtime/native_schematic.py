@@ -378,6 +378,10 @@ def operate(request):
                 )
         library_sha = fingerprint(Path(data.CentralLibraryPath))
         design, sheet = request["design"], request["sheet"]
+        if request["action"] == "logical":
+            from runtime.native_logical import inspect
+
+            return inspect(app, request, identity, initial)
         current = read_sheet(app, design, sheet)
         if identity() != initial:
             raise PadsError("target_changed", "Project changed while reading")

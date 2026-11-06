@@ -17,8 +17,9 @@ from runtime.schematic import Schematic
 
 def dispatch(name, args, sdd, state):
     if name in ('inspect_pads_sheet','preview_pads_schematic_change','execute_pads_schematic_change',
-                'preview_pads_schematic_recovery','reopen_pads_schematic_change','check_pads_schematic'):
+                'preview_pads_schematic_recovery','reopen_pads_schematic_change','check_pads_schematic','inspect_pads_logical_connectivity'):
         service=Schematic(sdd,state)
+        if name=='inspect_pads_logical_connectivity':return service.inspect_logical(args['session_id'],args['design'],args['pins'],args.get('baseline_id'))
         if name=='check_pads_schematic':return service.check_sheet(args['session_id'],args['design'],args['sheet'],args.get('baseline_id'),args.get('profile','connectivity'),args.get('scope','sheet'))
         if name=='inspect_pads_sheet':return service.inspect_sheet(args['session_id'],args['design'],args['sheet'])
         if name=='preview_pads_schematic_change':return service.preview_change(args['session_id'],args['design'],args['sheet'],args['operation'])
@@ -63,6 +64,8 @@ def dispatch(name, args, sdd, state):
             route_evidence=json.loads(route_path.read_text(encoding='utf-8')) if route_path.is_file() else None
             junction_path=state/'evidence'/f'p2d-acceptance-{domain}.json'
             junction_evidence=json.loads(junction_path.read_text(encoding='utf-8')) if junction_path.is_file() else None
+            logical_path=state/'evidence'/f'p2e-acceptance-{domain}.json'
+            logical_evidence=json.loads(logical_path.read_text(encoding='utf-8')) if logical_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -75,6 +78,8 @@ def dispatch(name, args, sdd, state):
                                  'recorded_route_acceptance':route_evidence,
                                  'bounded_interior_routing_verified':bool(junction_evidence and junction_evidence.get('status')=='passed'),
                                  'recorded_junction_acceptance':junction_evidence,
+                                 'selected_logical_connectivity_verified':bool(logical_evidence and logical_evidence.get('status')=='passed'),
+                                 'recorded_logical_acceptance':logical_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}

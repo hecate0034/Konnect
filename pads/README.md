@@ -9,11 +9,11 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.5.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.6.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
-connectivity/electrical native profiles with sheet or root-design baseline comparison. There are 20 domain
-tools. Full ERC, PCB writes and library writes remain outside the verified scope.
+connectivity/electrical native profiles, and selected global/hierarchical pin checks
+using fresh native netlist exports with baseline comparison. There are 21 domain tools. Full ERC, PCB writes and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
 
@@ -439,3 +439,70 @@ upgrading a fixture. Records remain local for inspection.
 This is not a flattened global/hierarchical pin table, complete ERC, power-integrity
 simulation, hidden-pin/multi-unit verification, cross-sheet routing or PCB sync.
 Annotated segment splitting and those broader capabilities remain subsequent work.
+
+## Native logical connectivity (P2e)
+
+`inspect_pads_logical_connectivity` is in the `edit` toolset because the same
+configured disposable-fixture guard applies. It performs reads and writes local
+evidence files; it does not change schematic objects or run packaging/PCB sync.
+
+```json
+{
+  "session_id": "<bound session ID>",
+  "design": "CORPORATE",
+  "pins": [
+    {"refdes": "U27", "pin_number": "15"},
+    {"refdes": "U29", "pin_number": "15"}
+  ]
+}
+```
+
+Supply 1–16 distinct reference-designator / physical-pin-number pairs. The server
+runs fixed installed `SctNetlist.exe` and `AllegroNetlist.exe` exporters against
+the bound project's `DxD` snapshot / `DX` flow. It parses and compares their
+flattened pin membership, then repeats the exports and live-pin reads to detect
+changes. Each call uses new output paths, not old project/PCB netlist files.
+The design must already be packaged. Adding a component can invalidate packaging;
+`logical_design_unpacked` is reported even if a partial export file exists. The
+read tool never packages, renumbers, or updates library mappings automatically.
+Zero exit status alone is insufficient: diagnostics, missing/incomplete output,
+conflicting pin assignments, unknown syntax and differing exports are refused.
+The two exporters share Siemens' engine; this is not an independent electrical solver.
+
+Results contain the normalized exported graph, its hash, selected live component
+UIDs, **full instance paths**, sheets, pin UIDs and physical-net identities, plus
+exported logical-net membership and pairwise connection results. Same local net
+names or UIDs never establish a connection by themselves. Electrical-group
+`E-NETS` declarations in SCT are not used to merge physical `NETS` members.
+Exported net names identify nets only within that design/report; they are not
+permanent database UIDs. Full graph export does not mean all physical pin mappings
+were independently checked: `full_design_pin_mapping_verified` remains false.
+
+An optional `baseline_id` compares the same project/design/selected pin set and
+exporter/parser provenance. It reports graph, component declarations and selected
+pin changes. Inspection failures are not saved as successful baselines. Session,
+fixture, library and source database boundaries remain enforced.
+
+Live instance pin numbers must be present and unambiguous. Some parts (e.g. U12
+in the official sample) have blank instance numbers although the native exporter
+resolves them through library mapping. Those selections are refused. Repeated
+identical SCT power-pin declarations are retained as metadata and deduplicated
+only in the declaration list; ambiguous live unit pins (e.g. U6.8) remain refused.
+No hidden-pin inference, library pin mapping, shared-unit edit or full ERC claim.
+
+Current parser limits: 5,000 exported packages, 10,000 nets, 100,000 declared pins,
+10,000 live component instances and 16 MiB per export file. Each exporter has a
+25-second timeout within the 180-second native worker / 270-second supervisor.
+Names containing unsupported delimiter/quote syntax fail closed rather than being
+silently truncated or normalized. Other local GUI changes are not locked out;
+stable repeated observations are not an atomic database snapshot guarantee.
+
+Acceptance on a separately prepared/configured/hosted fixture:
+
+```powershell
+python pads/smoke_logical.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2e --fixture .pads-runtime/p2e/fixture
+```
+
+See [P2 fifth acceptance](docs/p2e-acceptance.md). Annotated segment splitting,
+rotation, implicit library pin mapping and complete multi-unit handling remain
+separate increments before PCB write development.

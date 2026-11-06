@@ -44,6 +44,58 @@ class Schematic(Edits):
                 self.runner(self.base(session_id, design, sheet, "inspect"))
             )
 
+    def inspect_logical(self, session_id, design, pins, baseline_id=None):
+        from .logical import validate_pins, compare_reports
+
+        validate_pins(pins)
+        with self.lock():
+            request = self.base(session_id, design, "*", "logical", pins=pins)
+            previous = None
+            with self.db() as db:
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS logical_checks (id TEXT PRIMARY KEY, record TEXT NOT NULL)"
+                )
+                if baseline_id is not None:
+                    row = db.execute(
+                        "SELECT record FROM logical_checks WHERE id=?", (baseline_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise PadsError(
+                            "check_not_found", "Logical baseline was not found"
+                        )
+                    previous = json.loads(row[0])
+                    self.same_scope(previous, request)
+                    if previous["design"] != design or sorted(
+                        (p["refdes"], p["pin_number"]) for p in previous["pins"]
+                    ) != sorted((p["refdes"], p["pin_number"]) for p in pins):
+                        raise PadsError(
+                            "check_scope_mismatch",
+                            "Logical baseline uses another design or selected pin set",
+                        )
+            check_id = uuid.uuid4().hex
+            request["output_dir"] = str(
+                (self.state / "evidence" / ("logical-" + check_id)).resolve()
+            )
+            result = self.checked(self.runner(request))
+            self.sessions.load(session_id)
+            record = {
+                "check_id": check_id,
+                "design": design,
+                "pins": pins,
+                "project": request["expected_path"],
+                "policy_sha256": request["policy_sha256"],
+                **result,
+            }
+            if previous:
+                record["comparison"] = compare_reports(previous, record)
+                record["baseline_id"] = baseline_id
+            with self.db() as db:
+                db.execute(
+                    "INSERT INTO logical_checks VALUES (?,?)",
+                    (check_id, json.dumps(record)),
+                )
+            return record
+
     def check_sheet(
         self,
         session_id,
