@@ -1,4 +1,7 @@
 /target/
+/.pads-runtime/
+/pads/server/target/
+/pads/.pytest_cache/
 /result
 /result-*
 crates/*/target/

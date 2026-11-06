@@ -1,0 +1,17 @@
+[package]
+name = "pads-automation"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.96"
+
+# Standalone build: the PADS server must not require KiCad, NNG or protobuf.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonschema = { version = "0.58", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
