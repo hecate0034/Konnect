@@ -9,9 +9,10 @@ from smoke_sessions import Client
 from runtime.diagnostics import fingerprint
 
 
-def run(server, python, sdd, state, fixture):
+def run(server, python, sdd, state, fixture, interior=False):
+    batch = "p2d" if interior else "p2c"
     project = (fixture / "LessonFinal/LessonFinal.prj").resolve(strict=True)
-    evidence = state / "evidence" / ("p2c-" + uuid.uuid4().hex[:8])
+    evidence = state / "evidence" / (batch + "-" + uuid.uuid4().hex[:8])
     evidence.mkdir(parents=True)
     report = {
         "status": "running",
@@ -72,8 +73,15 @@ def run(server, python, sdd, state, fixture):
             label, "execute_pads_schematic_change", {"preview_id": p["preview_id"]}
         )
 
-    def check(label, baseline=None):
-        args = {"session_id": sid, "design": design, "sheet": sheet}
+    def check(label, baseline=None, scope="sheet"):
+        profile = "electrical" if interior else "connectivity"
+        args = {
+            "session_id": sid,
+            "design": design,
+            "sheet": sheet,
+            "profile": profile,
+            "scope": scope,
+        }
         if baseline:
             args["baseline_id"] = baseline["check_id"]
         return invoke(label, "check_pads_schematic", args)
@@ -107,6 +115,27 @@ def run(server, python, sdd, state, fixture):
             {"session_id": sid, "design": design, "sheet": sheet},
         )["sheet"]
         first = check("baseline_check")
+        if interior:
+            design_first = check("design_baseline", scope="design")
+            assert design_first["design_inventory"]["same_name_cross_page_candidates"]
+            assert not design_first["design_inventory"][
+                "flattened_connectivity_verified"
+            ]
+            assert len(design_first["native_verify"]["enabled_checks"]) == 8
+            check_args = {
+                "session_id": sid,
+                "design": design,
+                "sheet": sheet,
+                "baseline_id": first["check_id"],
+                "profile": "electrical",
+                "scope": "design",
+            }
+            invoke(
+                "mixed_scope_baseline_refused",
+                "check_pads_schematic",
+                check_args,
+                "check_scope_mismatch",
+            )
         source = next(
             c["target"] for c in baseline["components"] if c["target"]["refdes"] == "C2"
         )
@@ -167,8 +196,22 @@ def run(server, python, sdd, state, fixture):
             "unit": "0.01_inch",
             "points": [[800, 300], [800, 400], [600, 400]],
         }
+        if interior:
+            branch_op["b"]["point"] = [450, 400]
+            branch_op["points"] = [[800, 300], [800, 350], [450, 350], [450, 400]]
         branch = preview("branch_preview", branch_op)
-        execute("branch_execute", branch)
+        branch_result = execute("branch_execute", branch)
+        if interior:
+            assert (
+                len(
+                    next(
+                        n
+                        for n in branch_result["sheet"]["nets"]
+                        if n["uid"] == new["uid"]
+                    )["segments"]
+                )
+                == 7
+            )
         sid = reopen("branch_reopen", branch)
         branched = check("branch_check", loose)
         matched = next(
@@ -182,6 +225,8 @@ def run(server, python, sdd, state, fixture):
             "stale_recovery",
         )
         undo, _ = recover("branch_recovery", branch)
+        if interior:
+            sid = reopen("branch_recovery_reopen", undo)
         named = next(
             n for n in baseline["nets"] if n["uid"] == "$11N3" and n["name"] == "VDD"
         )
@@ -201,6 +246,26 @@ def run(server, python, sdd, state, fixture):
             {**named_op, "points": [[800, 300], [700, 300], [700, 1025], [895, 1025]]},
             "pin_exit_unsupported",
         )
+        if interior:
+            rejected = {
+                **named_op,
+                "b": {**named_op["b"], "point": [895, 1040]},
+                "points": [
+                    [800, 300],
+                    [800, 350],
+                    [700, 350],
+                    [700, 1040],
+                    [895, 1040],
+                ],
+            }
+            preview("annotated_interior_refused", rejected, "anchor_unsupported")
+            named = next(n for n in baseline["nets"] if n["uid"] == "$11N4")
+            named_op["b"] = {
+                "net_uid": named["uid"],
+                "net_name": named["name"],
+                "point": [850, 945],
+            }
+            named_op["points"] = [[800, 300], [800, 900], [850, 900], [850, 945]]
         named_change = preview("named_net_preview", named_op)
         execute("named_net_execute", named_change)
         sid = reopen("named_net_reopen", named_change)
@@ -232,6 +297,20 @@ def run(server, python, sdd, state, fixture):
             and final["comparison"]["native_findings_equal"]
         )
         assert all(v == 0 for v in final["comparison"]["native_counts_delta"].values())
+        if interior:
+            design_final = check("design_final", design_first, "design")
+            assert design_final["comparison"]["design_inventory_equal"]
+            assert design_final["comparison"]["native_findings_equal"]
+            assert design_final["comparison"]["netlist_equal"]
+            assert all(
+                v == 0
+                for v in design_final["comparison"]["native_counts_delta"].values()
+            )
+            report["design_native_baseline"] = design_first["native_verify"]["counts"]
+            report["design_nets"] = len(design_first["design_inventory"]["nets"])
+            report["cross_page_name_candidates"] = len(
+                design_first["design_inventory"]["same_name_cross_page_candidates"]
+            )
         invoke("release", "release_pads_session", {"session_id": sid})
         manifest = json.loads((fixture / "source-manifest.json").read_text())
         assert all(
@@ -262,7 +341,7 @@ def run(server, python, sdd, state, fixture):
             complete_recorded_sheet_restored=True,
         )
         (evidence / "report.json").write_text(json.dumps(report, indent=2))
-        (state / "evidence/p2c-acceptance-designer.json").write_text(
+        (state / ("evidence/" + batch + "-acceptance-designer.json")).write_text(
             json.dumps(report, indent=2)
         )
         return report
@@ -278,6 +357,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     for name in ("server", "python", "sdd", "state", "fixture"):
         p.add_argument("--" + name, type=Path, required=True)
+    p.add_argument("--interior", action="store_true")
     a = p.parse_args()
     print(
         json.dumps(
@@ -285,7 +365,8 @@ if __name__ == "__main__":
                 *(
                     getattr(a, n).resolve()
                     for n in ("server", "python", "sdd", "state", "fixture")
-                )
+                ),
+                interior=a.interior
             )
         )
     )

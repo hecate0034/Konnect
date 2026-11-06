@@ -189,6 +189,14 @@ def test_native_check_baseline_is_scoped_and_failed_check_is_not_recorded(
         lambda: service.check_sheet(sid, "d", "other", baseline["check_id"]),
     )
     assert len(calls) == count
+    for profile, scope in (("electrical", "sheet"), ("connectivity", "design")):
+        expect(
+            "check_scope_mismatch",
+            lambda: service.check_sheet(
+                sid, "d", "s", baseline["check_id"], profile, scope
+            ),
+        )
+    assert len(calls) == count
     service.runner = lambda request: {
         "ok": False,
         "error": {"kind": "native_check_timeout", "message": "timeout"},

@@ -9,10 +9,10 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.4.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.5.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
-explicit multi-segment connections, existing-net branches, guarded recovery, and
-three native connectivity checks with baseline comparison. There are 20 domain
+explicit multi-segment connections, guarded interior/corner branches, recovery, and
+connectivity/electrical native profiles with sheet or root-design baseline comparison. There are 20 domain
 tools. Full ERC, PCB writes and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
@@ -360,8 +360,12 @@ Replace placeholders with inspected identities. Alternatively `b` can use the sa
 `target`/`pin_uid` structure as `a`, for another free pin. Routes allow 1–8 nonzero
 orthogonal segments. Redundant collinear vertices, backtracking, self-intersection,
 unrelated pins/wires and component-body crossings are refused. The start pin must
-be free; this does not merge two existing nets. Existing-net anchors must already
-be wire corners or solder joints, not arbitrary points inside a segment or pin joints.
+be free; this does not merge two existing nets. Existing-net anchors may be wire corners/solder joints or an unambiguous orthogonal
+segment interior. Interior splitting requires native confirmation that the segment
+has no label (including invisible labels) or attributes; bus and pin joints are refused.
+The original segment is split with a solder joint while retaining the net UID.
+Recovery selects only explicit added route edges, allowing native merging of the
+original two pieces; it never selects all edges missing from the old geometry.
 Named nets require both the exact native UID and exact current name; no name-only lookup.
 Pin paths must leave perpendicular to one unambiguous component bounding-box edge;
 tangent departures, corner pins and pins inside the bounding box are refused because
@@ -381,13 +385,22 @@ No general Undo command, whole-net replacement or automatic net renaming is used
 
 - A local physical-net connection table, independently cross-checked through
   component-to-net and native net-to-pin enumeration, plus unconnected pins.
-- Native `vdrc.exe` results for exactly three enabled checks: `UnconnectedPins`,
-  `ZeroPin` and `NetOverlap`. All other checks are disabled in this explicit profile.
+- Native `vdrc.exe` results using `profile="connectivity"` (default): `UnconnectedPins`,
+  `ZeroPin`, `NetOverlap`; or `profile="electrical"`, additionally enabling `Undriven`,
+  `MultDriv`, `DriveGlobal`, `OutputDirectlyPG`, `PowerGroundPinConnection`. Unlisted
+  checks are disabled; existing options in the installed definitions are preserved.
+- `scope="sheet"` (default) requests the selected page with `-page`; native flat-net
+  rules still use the checker's global resolution semantics. `scope="design"` omits `-page`
+  and checks the root block across pages, without `-hier`. It also records root-block
+  physical net identities before/after and lists cross-page same-name candidates.
+  Those candidates explicitly have `electrical_equivalence_verified=false`; local
+  UIDs are qualified by sheet and no same-name nets are merged. The returned pin
+  table remains single-sheet. Global equivalence/hierarchy is not independently proved.
 - Rule/executable fingerprints, raw local evidence, error/warning/note counts and
   findings. `status=completed` means the checker finished, not that the circuit passed.
   `profile_clean` refers only to this profile; `full_erc_verified` remains false.
 - With `baseline_id`, differences in physical net membership, unconnected pins,
-  native finding text and counts. Different sheets, fixtures or checker/rule
+  native finding text and counts. Different profiles, scopes, sheets, fixtures or checker/rule
   fingerprints cannot be compared as an equivalent baseline.
 
 The profile is generated under the state directory from installed definitions.
@@ -397,7 +410,9 @@ the generated profile is passed as definitions, with fixed empty overrides. Nati
 exit code zero alone is never treated as a successful check: a recognized complete
 summary is required. A native check has a 90-second timeout within the existing
 180-second native worker / 270-second supervisor limits. Checking verifies recorded
-sheet state before/after, but does not promise byte-identical native log files.
+sheet state (including recorded segment labels/attributes) before/after and, for design
+scope, root-block net identity/name inventory. It does not freeze other GUI activity,
+record every other sheet's geometry, or promise byte-identical native log files.
 
 Use a separate prepared/configured fixture, launch its Designer host, then run:
 
@@ -411,8 +426,16 @@ net, verifies persistence, then reverses changes and compares final netlist/chec
 results to the baseline. Existing baseline warnings are retained and reported.
 See [P2 third acceptance](docs/p2c-acceptance.md) for actual outcomes.
 
-This remains single-sheet physical connectivity: it does not flatten same-name
-global nets, hierarchy, hidden power pins or multi-unit packages. The three-check
-profile is not a full electrical-rule, power-driver, library-packaging or PCB sync
-verification. Interior segment splitting, cross-sheet routing and broader ERC
-remain work for subsequent P2 increments.
+For P2d acceptance use the same command with a separate `.pads-runtime/p2d` fixture
+and `--interior`. It tests an unnamed interior branch and a named-net interior branch,
+annotation refusal, persistence/recovery, electrical profiles, design-wide baseline
+comparison and unchanged source/library/PCB fingerprints. See [P2 fourth acceptance](docs/p2d-acceptance.md).
+
+Native sheet records now include `decoration_checked` and label/attribute metadata.
+Create fresh previews after upgrading; old records lacking these fields intentionally
+fail stale-state checks. Finish/recover old edits with the matching version before
+upgrading a fixture. Records remain local for inspection.
+
+This is not a flattened global/hierarchical pin table, complete ERC, power-integrity
+simulation, hidden-pin/multi-unit verification, cross-sheet routing or PCB sync.
+Annotated segment splitting and those broader capabilities remain subsequent work.

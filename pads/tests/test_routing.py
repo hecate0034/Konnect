@@ -115,6 +115,8 @@ def test_branch_preserves_old_net_identity_and_can_recover_observed_prefix(sheet
         verify_change(p, after)
     op["b"]["point"] = [25, 20]
     op["points"][-1] = [25, 20]
+    for seg in before["nets"][0]["segments"]:
+        seg["decoration_checked"] = False
     with pytest.raises(PadsError) as e:
         plan(before, op)
     assert e.value.kind == "anchor_unsupported"

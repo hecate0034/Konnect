@@ -61,9 +61,9 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
-        tool("check_pads_schematic", "edit", "Read a bidirectionally verified single-sheet physical netlist and run three explicit native Verify checks (unconnected pins, dangling nets, net overlap). Optional baseline comparison. Test copies only; not full ERC or hierarchy verification.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"baseline_id":session}), json!(["session_id","design","sheet"])),
+        tool("check_pads_schematic", "edit", "Read a single-sheet physical netlist and run a connectivity or electrical native Verify profile on one sheet or all sheets of the root design. Reports cross-page same-name candidates without merging them. No hierarchy/full ERC claim. Test copies only.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"baseline_id":session,"profile":{"type":"string","enum":["connectivity","electrical"]},"scope":{"type":"string","enum":["sheet","design"]}}), json!(["session_id","design","sheet"])),
         tool("inspect_pads_sheet", "edit", "Read component/pin positions, instance attributes and all wire endpoints on one existing test-copy sheet. Reports pin endpoint gaps; not full ERC.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name}), json!(["session_id","design","sheet"])),
-        tool("preview_pads_schematic_change", "edit", "Preview an edit, reused placement, straight connection or explicit orthogonal route of up to eight segments. Routes may join an existing wire corner/solder joint while preserving its net identity. Test copies only; no net merging or interior segment splitting.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
+        tool("preview_pads_schematic_change", "edit", "Preview an edit, reused placement, straight connection or explicit orthogonal route of up to eight segments. Routes may join an existing wire corner/solder joint or one inspected unannotated segment interior while preserving its net identity. Test copies only; no net merging.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
         tool("execute_pads_schematic_change", "edit", "Consume a sheet change or recovery preview once, check entire recorded sheet state, execute and verify the exact geometry/connectivity delta. Native writes persist immediately.", json!({"preview_id":session}), json!(["preview_id"])),
         tool("preview_pads_schematic_recovery", "edit", "Preview reversing a recorded supported change only if the sheet still matches its observed result. Refuses overwriting later edits. Unknown outcomes require inspection.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
         tool("reopen_pads_schematic_change", "edit", "Close/reopen the configured test project after an executed sheet change or recovery and compare all recorded sheet geometry, properties and pin/net identities. Invalidates session.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
@@ -219,7 +219,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.4.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.5.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -374,6 +374,13 @@ mod tests {
             .validator;
         assert!(!check.is_valid(
             &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","command":"arbitrary"})
+        ));
+        assert!(check.is_valid(&json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","profile":"electrical","scope":"design"})));
+        assert!(!check.is_valid(
+            &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","profile":"all"})
+        ));
+        assert!(!check.is_valid(
+            &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","scope":"hierarchy"})
         ));
     }
     #[test]

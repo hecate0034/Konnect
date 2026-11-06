@@ -201,8 +201,10 @@ def recover(app, original, observed):
     kind = original["kind"]
     if kind == "route" and original["route"]["existing_net"]:
         uid = original["route"]["existing_net"]["uid"]
-        prior = original["route"]["existing_net"]["segments"]
-        old_edges = {(tuple(s["a"]), tuple(s["b"])) for s in prior}
+        points = original["route"]["points"]
+        added_edges = {
+            tuple(sorted((tuple(a), tuple(b)))) for a, b in zip(points, points[1:])
+        }
         net = next(n for n in call(app.ActiveView, "Query", 32, 0) if str(n.UID) == uid)
         block = net.Parent
         call(block, "DeSelectAll")
@@ -210,19 +212,27 @@ def recover(app, original, observed):
         for s in segments:
             from runtime.native_geometry import point
 
-            edge = (
-                tuple(point(call(s, "Location", 0))),
-                tuple(point(call(s, "Location", 1))),
+            edge = tuple(
+                sorted(
+                    (
+                        tuple(point(call(s, "Location", 0))),
+                        tuple(point(call(s, "Location", 1))),
+                    )
+                )
             )
-            if edge not in old_edges:
+            if edge in added_edges:
                 call(net, "SelectSegment", s)
         # Confirm selection is exactly the added segments before deleting anything.
         for s in segments:
-            edge = (
-                tuple(point(call(s, "Location", 0))),
-                tuple(point(call(s, "Location", 1))),
+            edge = tuple(
+                sorted(
+                    (
+                        tuple(point(call(s, "Location", 0))),
+                        tuple(point(call(s, "Location", 1))),
+                    )
+                )
             )
-            if bool(call(net, "IsSegmentSelected", s)) != (edge not in old_edges):
+            if bool(call(net, "IsSegmentSelected", s)) != (edge in added_edges):
                 raise PadsError(
                     "recovery_unsafe",
                     "Native segment selection differs from recovery plan",
@@ -373,12 +383,32 @@ def operate(request):
             raise PadsError("target_changed", "Project changed while reading")
         action = request["action"]
         if action == "check":
-            from runtime.electrical import native_connectivity, run_verify
-
-            connectivity = native_connectivity(app, current)
-            check = run_verify(
-                Path(request["expected_path"]), design, sheet, request["output_dir"]
+            from runtime.electrical import (
+                native_connectivity,
+                run_verify,
+                design_inventory,
+                check_options,
             )
+
+            profile, scope = request.get("profile", "connectivity"), request.get(
+                "check_scope", "sheet"
+            )
+            check_options(profile, scope)
+            connectivity = native_connectivity(app, current)
+            inventory = design_inventory(app, design) if scope == "design" else None
+            check = run_verify(
+                Path(request["expected_path"]),
+                design,
+                sheet,
+                request["output_dir"],
+                profile,
+                scope,
+            )
+            if scope == "design" and design_inventory(app, design) != inventory:
+                raise PadsError(
+                    "check_changed_design",
+                    "Root-block net inventory changed during native verification",
+                )
             if read_sheet(app, design, sheet) != current or identity() != initial:
                 raise PadsError(
                     "check_changed_design",
@@ -388,6 +418,7 @@ def operate(request):
                 "ok": True,
                 "connectivity": connectivity,
                 "native_verify": check,
+                "design_inventory": inventory,
                 "geometry_issues": wire_issues(current["components"], current["nets"]),
                 "identity": initial,
                 "project_write_attempted": False,

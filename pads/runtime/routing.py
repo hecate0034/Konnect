@@ -8,7 +8,9 @@ from .sessions import PadsError
 def segment(a, b, ja, jb):
     if a > b:
         a, b, ja, jb = b, a, jb, ja
-    return dict(a=a[:], b=b[:], joint_a=ja, joint_b=jb, bus=False)
+    return dict(
+        a=a[:], b=b[:], joint_a=ja, joint_b=jb, bus=False, decoration_checked=True
+    )
 
 
 def pin_exit(component, pin, neighbor):
@@ -61,8 +63,17 @@ def prepare_route(sheet, op):
         )
     endpoints = [(ca["target"], a["uid"])]
     target_net = None
+    split = None
     if isinstance(op["b"], dict) and set(op["b"]) == {"net_uid", "net_name", "point"}:
         b = op["b"]
+        if (
+            not isinstance(b["point"], list)
+            or len(b["point"]) != 2
+            or any(type(v) is not int for v in b["point"])
+        ):
+            raise PadsError(
+                "invalid_route", "Net anchor must be an integer coordinate pair"
+            )
         matches = [
             n
             for n in sheet["nets"]
@@ -76,8 +87,27 @@ def prepare_route(sheet, op):
         at_anchor = [
             s for s in target_net["segments"] if b["point"] in (s["a"], s["b"])
         ]
+        interiors = [
+            s
+            for s in target_net["segments"]
+            if b["point"] not in (s["a"], s["b"])
+            and on_segment(b["point"], s["a"], s["b"])
+        ]
+        if len(interiors) == 1 and not at_anchor:
+            split = interiors[0]
+            if (
+                split.get("decoration")
+                or not split.get("decoration_checked", False)
+                or (split["a"][0] != split["b"][0] and split["a"][1] != split["b"][1])
+                or any(split["joint_" + k] not in (1, 2, 3, 5) for k in ("a", "b"))
+            ):
+                raise PadsError(
+                    "anchor_unsupported",
+                    "Interior split requires a natively inspected segment without labels or attributes",
+                )
         if (
-            not at_anchor
+            (not at_anchor and split is None)
+            or (interiors and (len(interiors) != 1 or at_anchor))
             or any(s["bus"] for s in target_net["segments"])
             or any(
                 s["joint_" + k] not in (3, 5)
@@ -88,7 +118,7 @@ def prepare_route(sheet, op):
         ):
             raise PadsError(
                 "anchor_unsupported",
-                "Use an existing wire corner or solder joint; interior splitting is not supported",
+                "Use one unambiguous non-bus wire interior, corner or solder joint",
             )
         end = b["point"]
     else:
@@ -120,17 +150,17 @@ def prepare_route(sheet, op):
             for s in n["segments"]:
                 if not intersects(p, q, s["a"], s["b"]):
                     continue
-                # Only the final endpoint may touch the explicitly chosen joint.
+                # Only the final endpoint may touch the explicitly chosen anchor.
                 allowed = (
                     target_net is not None
                     and n["uid"] == target_net["uid"]
                     and i == len(edges) - 1
-                    and end in (s["a"], s["b"])
+                    and on_segment(end, s["a"], s["b"])
                 )
                 if allowed:
-                    other = s["b"] if s["a"] == end else s["a"]
-                    allowed = not on_segment(p, s["a"], s["b"]) and not on_segment(
-                        other, p, q
+                    allowed = not on_segment(p, s["a"], s["b"]) and not any(
+                        endpoint != end and on_segment(endpoint, p, q)
+                        for endpoint in (s["a"], s["b"])
                     )
                 if not allowed:
                     raise PadsError(
@@ -172,6 +202,7 @@ def prepare_route(sheet, op):
         "points": copy.deepcopy(points),
         "added_segments": canonical(added),
         "existing_net": copy.deepcopy(target_net),
+        **({"split_segment": copy.deepcopy(split)} if split else {}),
     }
 
 
@@ -206,6 +237,13 @@ def verify_route(prepared, actual, completed=None):
     if existing:
         net = next(n for n in expected["nets"] if n["uid"] == existing["uid"])
         anchor = route["points"][-1]
+        split = route.get("split_segment")
+        if split:
+            net["segments"].remove(split)
+            net["segments"] += [
+                segment(split["a"], anchor, split["joint_a"], 5),
+                segment(anchor, split["b"], 5, split["joint_b"]),
+            ]
         for s in net["segments"]:
             for k in ("a", "b"):
                 if s[k] == anchor:

@@ -36,6 +36,32 @@ def point(obj):
 def net_state(net):
     segments = []
     for s in call(net, "GetSegments"):
+        label = call(net, "GetLabel", s)
+        decoration = {}
+        if label:
+            decoration["label"] = {
+                "text": str(label.TextString),
+                "resolved_name": str(label.ResolvedName),
+                "scope": int(label.Scope),
+                "point": point(call(label, "GetLocation")),
+                "visible": bool(label.Visible),
+                "orientation": int(label.Orientation),
+                "size": int(label.Size),
+                "sense": int(label.Sense),
+                "origin": int(label.Origin),
+                "font": int(label.Font),
+            }
+        attributes = [
+            {
+                "name": str(a.Name),
+                "base_value": str(a.Value),
+                "instance_value": str(a.InstanceValue),
+                "effective_value": str(a.EitherValue),
+            }
+            for a in s.Attributes
+        ]
+        if attributes:
+            decoration["attributes"] = canonical(attributes)
         segments.append(
             {
                 "a": point(call(s, "Location", 0)),
@@ -43,6 +69,8 @@ def net_state(net):
                 "joint_a": int(call(s, "GetJointType", 0)),
                 "joint_b": int(call(s, "GetJointType", 1)),
                 "bus": bool(call(s, "IsBus")),
+                "decoration_checked": True,
+                **({"decoration": decoration} if decoration else {}),
             }
         )
     return {

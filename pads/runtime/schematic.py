@@ -44,11 +44,22 @@ class Schematic(Edits):
                 self.runner(self.base(session_id, design, sheet, "inspect"))
             )
 
-    def check_sheet(self, session_id, design, sheet, baseline_id=None):
-        from .electrical import compare_checks
+    def check_sheet(
+        self,
+        session_id,
+        design,
+        sheet,
+        baseline_id=None,
+        profile="connectivity",
+        scope="sheet",
+    ):
+        from .electrical import compare_checks, check_options
 
+        check_options(profile, scope)
         with self.lock():
-            request = self.base(session_id, design, sheet, "check")
+            request = self.base(
+                session_id, design, sheet, "check", profile=profile, check_scope=scope
+            )
             previous = None
             with self.db() as db:
                 db.execute(
@@ -63,6 +74,14 @@ class Schematic(Edits):
                             "check_not_found", "Recorded baseline check was not found"
                         )
                     previous = json.loads(row[0])
+                    if (
+                        previous.get("profile", "connectivity") != profile
+                        or previous.get("check_scope", "sheet") != scope
+                    ):
+                        raise PadsError(
+                            "check_scope_mismatch",
+                            "Baseline uses another rule profile or check scope",
+                        )
                     self.same_scope(previous, request)
                     if (previous["design"], previous["sheet"]) != (design, sheet):
                         raise PadsError(
@@ -79,6 +98,8 @@ class Schematic(Edits):
                 "policy_sha256": request["policy_sha256"],
                 "design": design,
                 "sheet": sheet,
+                "profile": profile,
+                "check_scope": scope,
                 **result,
             }
             if previous:

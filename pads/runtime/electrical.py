@@ -13,15 +13,76 @@ from .routing import netlist
 from .sessions import PadsError
 
 CHECKS = ("UnconnectedPins", "ZeroPin", "NetOverlap")
+PROFILES = {
+    "connectivity": CHECKS,
+    "electrical": CHECKS
+    + (
+        "Undriven",
+        "MultDriv",
+        "DriveGlobal",
+        "OutputDirectlyPG",
+        "PowerGroundPinConnection",
+    ),
+}
 
 
-def verify_profile(definitions):
+def check_options(profile, scope):
+    if profile not in PROFILES or scope not in ("sheet", "design"):
+        raise PadsError(
+            "invalid_check_options", "Use a supported profile and sheet/design scope"
+        )
+
+
+def design_inventory(app, design):
+    """Root-block physical objects; same names are candidates, never merged nets."""
+    from .native_designer import call
+
+    rows = []
+    for net in call(app, "DesignNets", "", design, "-1", "", False):
+        rows.append(
+            {
+                "sheet": str(net.Parent.SheetNum),
+                "uid": str(net.UID),
+                "name": str(net.LogicalNetName),
+            }
+        )
+        if len(rows) > 5000:
+            raise PadsError(
+                "design_too_large", "Root design check limit is 5000 physical nets"
+            )
+    rows = canonical(rows)
+    keys = [(r["sheet"], r["uid"]) for r in rows]
+    if len(set(keys)) != len(keys):
+        raise PadsError(
+            "ambiguous_net_inventory", "Physical net identity is not unique"
+        )
+    names = {}
+    for row in rows:
+        names.setdefault(row["name"], []).append(
+            {"sheet": row["sheet"], "uid": row["uid"]}
+        )
+    return {
+        "scope": "root_block_all_sheets_physical_net_inventory",
+        "nets": rows,
+        "same_name_cross_page_candidates": [
+            {"name": name, "members": members, "electrical_equivalence_verified": False}
+            for name, members in sorted(names.items())
+            if len({m["sheet"] for m in members}) > 1
+        ],
+        "flattened_connectivity_verified": False,
+        "hierarchy_included": False,
+    }
+
+
+def verify_profile(definitions, profile="connectivity"):
+    check_options(profile, "sheet")
+    checks = PROFILES[profile]
     # Preserve the installed definition file's byte syntax. The old native
     # reader distinguishes definition files (-def) from user settings (-set).
     data = re.sub(
         rb'(<Check\b[^>]*\bState=")Enabled("[^>]*>)', rb"\1Disabled\2", definitions
     )
-    for name in CHECKS:
+    for name in checks:
         data, count = re.subn(
             rb'(<Check Name="' + name.encode() + rb'"[^>]*State=")Disabled',
             rb"\1Enabled",
@@ -35,7 +96,7 @@ def verify_profile(definitions):
     root = ET.fromstring(data)
     if {
         c.get("Name") for c in root.iter("Check") if c.get("State") == "Enabled"
-    } != set(CHECKS):
+    } != set(checks):
         raise PadsError(
             "native_check_profile_changed", "Unexpected enabled native checks"
         )
@@ -118,16 +179,19 @@ def parse_verify_output(stdout, stderr, code):
     }
 
 
-def run_verify(project, design, sheet, output_dir):
+def run_verify(
+    project, design, sheet, output_dir, profile="connectivity", scope="sheet"
+):
+    check_options(profile, scope)
     sdd = Path(os.environ["SDD_HOME"]).resolve(strict=True)
     executable = sdd / "wv/win32/bin/vdrc.exe"
     defaults = sdd / "standard/VerifyDefaults.ini"
     inputs = {str(p): fingerprint(p) for p in (executable, defaults)}
-    profile = verify_profile(defaults.read_bytes())
+    profile_data = verify_profile(defaults.read_bytes(), profile)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
-    config = output_dir / "connectivity.ini"
-    config.write_bytes(profile)
+    config = output_dir / (profile + ".ini")
+    config.write_bytes(profile_data)
     settings = output_dir / "settings.ini"
     settings.write_bytes(
         b'<?xml version="1.0"?>\n<VDRC><FlowType Name="Expedition"/><GUI><Settings/><Rules/></GUI></VDRC>'
@@ -139,13 +203,13 @@ def run_verify(project, design, sheet, output_dir):
         str(project),
         "-block",
         design,
-        "-page",
-        sheet,
         "-set",
         str(settings),
         "-def",
         str(config),
     ]
+    if scope == "sheet":
+        command += ["-page", sheet]
     try:
         r = subprocess.run(
             command,
@@ -178,13 +242,15 @@ def run_verify(project, design, sheet, output_dir):
         r.returncode,
     )
     result.update(
-        profile="pads_connectivity_v1",
-        enabled_checks=list(CHECKS),
+        profile="pads_" + profile + "_v1",
+        scope=scope,
+        hierarchy_included=False,
+        enabled_checks=list(PROFILES[profile]),
         input_sha256=inputs,
         profile_sha256=profile_sha,
         settings_sha256=settings_sha,
         evidence=str(output_dir),
-        note="Three explicit native checks only. Project Verify.ini is not modified or used as a claim of full ERC.",
+        note="Only the listed native checks and selected root-block scope. No full ERC, flattened-netlist or power-integrity claim. Project Verify.ini is not modified.",
     )
     (output_dir / "result.json").write_text(
         json.dumps(result, indent=2), encoding="utf-8"
@@ -201,6 +267,8 @@ def compare_checks(before, after):
         != after["native_verify"].get("settings_sha256")
         or before["native_verify"]["input_sha256"]
         != after["native_verify"]["input_sha256"]
+        or before["native_verify"].get("scope", "sheet")
+        != after["native_verify"].get("scope", "sheet")
     ):
         raise PadsError(
             "check_baseline_changed",
@@ -208,6 +276,8 @@ def compare_checks(before, after):
         )
     a, b = before["connectivity"], after["connectivity"]
     return {
+        "design_inventory_equal": before.get("design_inventory")
+        == after.get("design_inventory"),
         "netlist_equal": a == b,
         "nets_before_only": [n for n in a["nets"] if n not in b["nets"]],
         "nets_after_only": [n for n in b["nets"] if n not in a["nets"]],
