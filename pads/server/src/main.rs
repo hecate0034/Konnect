@@ -61,6 +61,7 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("inspect_pads_pin_mapping", "edit", "Read selected explicit/implicit pin mappings from the effective project PartsDB, live full instance paths and fresh native netlists. Reports unique slots, ambiguity, shared physical pins and non-symbol supply pins. Test copies only; no pin assignment or write authorization.", json!({"session_id":session,"design":sheet_name,"refdes":{"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,63}$"}},"baseline_id":session}), json!(["session_id","design","refdes"])),
         tool("preview_pads_packaging", "edit", "Preflight one recorded unconnected reused placement against a prior native logical baseline. Runs fixed Add/NoFill BAM-only packaging with a private working PDB. Auxiliary reports are written. Only empty BAM, unchanged existing assignments and explicit new pin numbers are accepted; no pin remapping/renumbering.", json!({"session_id":session,"change_id":session,"baseline_id":session}), json!(["session_id","change_id","baseline_id"])),
         tool("execute_pads_packaging", "edit", "Consume one packaging preview, repeat preflight, update the test-copy database, then verify fresh native netlists and unchanged assignments/sheet/protected files. Use the placement's existing reopen and guarded recovery tools. No PCB sync, library writes or arbitrary modes.", json!({"preview_id":session}), json!(["preview_id"])),
         tool("inspect_pads_logical_connectivity", "edit", "Read fresh native SCT/Allegro flattened package-pin netlists twice and corroborate 1-16 selected pins against live component instance paths. Reports logical connections/separations and optional baseline differences. Test copies only; no full ERC or hidden/multi-unit pin inference.", json!({"session_id":session,"design":sheet_name,"pins":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"object","additionalProperties":false,"required":["refdes","pin_number"],"properties":{"refdes":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,63}$"},"pin_number":{"type":"string","pattern":"^[A-Za-z0-9_+\\-]{1,64}$"}}}},"baseline_id":session}), json!(["session_id","design","pins"])),
@@ -133,6 +134,7 @@ impl Worker {
         let timeout = if [
             "check_pads_schematic",
             "inspect_pads_logical_connectivity",
+            "inspect_pads_pin_mapping",
             "preview_pads_packaging",
             "execute_pads_packaging",
             "inspect_pads_sheet",
@@ -225,7 +227,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.7.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.8.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -438,6 +440,34 @@ mod tests {
         let mut invalid = base.clone();
         invalid["executable"] = json!("arbitrary");
         assert!(!schema.is_valid(&invalid));
+    }
+    #[test]
+    fn pin_mapping_schema_limits_selection_and_has_no_write_options() {
+        let tools = catalogue();
+        let schema = &tools
+            .iter()
+            .find(|t| t.name == "inspect_pads_pin_mapping")
+            .unwrap()
+            .validator;
+        let base =
+            json!({"session_id":"a".repeat(32),"design":"CORPORATE","refdes":["U12","U6","U4"]});
+        assert!(schema.is_valid(&base));
+        for refs in [
+            json!([]),
+            json!(["U1", "U1"]),
+            json!(["U1", "U2", "U3", "U4", "U5"]),
+            json!(["../U1"]),
+            json!([true]),
+        ] {
+            let mut invalid = base.clone();
+            invalid["refdes"] = refs;
+            assert!(!schema.is_valid(&invalid));
+        }
+        for key in ["execute", "library", "output_dir", "executable"] {
+            let mut invalid = base.clone();
+            invalid[key] = json!("arbitrary");
+            assert!(!schema.is_valid(&invalid));
+        }
     }
     #[test]
     fn sheet_operations_require_explicit_sources_and_pin_identities() {

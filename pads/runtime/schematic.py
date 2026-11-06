@@ -96,6 +96,68 @@ class Schematic(Edits):
                 )
             return record
 
+    def inspect_pin_mapping(self, session_id, design, refdes, baseline_id=None):
+        from .pin_mapping import validate_refs
+
+        validate_refs(refdes)
+        with self.lock():
+            request = self.base(session_id, design, "*", "pin_mapping", refdes=refdes)
+            previous = None
+            with self.db() as db:
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS mapping_checks (id TEXT PRIMARY KEY,record TEXT NOT NULL)"
+                )
+                if baseline_id is not None:
+                    row = db.execute(
+                        "SELECT record FROM mapping_checks WHERE id=?", (baseline_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise PadsError(
+                            "check_not_found", "Mapping baseline was not found"
+                        )
+                    previous = json.loads(row[0])
+                    self.same_scope(previous, request)
+                    if previous["design"] != design or sorted(
+                        previous["refdes"]
+                    ) != sorted(refdes):
+                        raise PadsError(
+                            "check_scope_mismatch",
+                            "Mapping baseline design/reference scope differs",
+                        )
+            check_id = uuid.uuid4().hex
+            request["output_dir"] = str(
+                (self.state / "evidence" / ("mapping-" + check_id)).resolve()
+            )
+            result = self.checked(self.runner(request))
+            self.sessions.load(session_id)
+            record = {
+                "check_id": check_id,
+                "design": design,
+                "refdes": refdes,
+                "project": request["expected_path"],
+                "policy_sha256": request["policy_sha256"],
+                **result,
+            }
+            if previous:
+                if previous["provenance"] != record["provenance"]:
+                    raise PadsError(
+                        "mapping_baseline_changed",
+                        "Effective PDB, native tools or mapping contract changed; create a fresh baseline",
+                    )
+                record.update(
+                    baseline_id=baseline_id,
+                    comparison={
+                        "mapping_equal": previous["mapping"] == record["mapping"],
+                        "parts_equal": previous["parts"] == record["parts"],
+                    },
+                )
+            with self.db() as db:
+                db.execute(
+                    "INSERT INTO mapping_checks VALUES (?,?)",
+                    (check_id, json.dumps(record)),
+                )
+            return record
+
     def check_sheet(
         self,
         session_id,

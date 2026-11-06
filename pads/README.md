@@ -9,11 +9,13 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.7.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.8.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
 connectivity/electrical native profiles, and selected global/hierarchical pin checks
-using fresh native netlist exports with baseline comparison. There are 23 domain tools. Full ERC, PCB writes and library writes remain outside the verified scope.
+using fresh native netlist exports with baseline comparison, plus selected effective
+project-library pin mapping evidence. There are 24 domain tools. Full ERC, PCB writes
+and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
 
@@ -565,5 +567,57 @@ Run the acceptance harness only on a prepared, configured and hosted test copy:
 python pads/smoke_packaging.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2f --fixture .pads-runtime/p2f/fixture
 ```
 
-See [P2 sixth acceptance](docs/p2f-acceptance.md). Nonempty BAM changes, implicit
-library pin mappings, shared/hidden pins and full ERC remain separate work.
+See [P2 sixth acceptance](docs/p2f-acceptance.md). Nonempty BAM changes, assignment
+of implicit/shared/hidden pins and full ERC remain separate work.
+
+## Selected project-library pin mappings (P2g)
+
+`inspect_pads_pin_mapping` belongs to the `edit` toolset because it requires the
+same configured disposable fixture, but performs no schematic/library mutation.
+Supply `session_id`, an existing `design`, and 1–4 exact distinct `refdes` values;
+an optional `baseline_id` compares a previous report for the same scope and sources.
+
+```json
+{"session_id":"<bound session>","design":"CORPORATE","refdes":["U12","U6","U4"]}
+```
+
+It copies the project's effective `Integration/LocalPartsDB.pdb` into a fresh local
+evidence directory, then runs the installed native `PartsDB2HKP` and `DataConvert`
+on that private copy. A bounded ASCII_PDB 02.01 reader correlates symbol pin names,
+swap groups and slots with full live instance paths and two clean SCT/Allegro export
+rounds. This is evidence from the **project's effective PDB**; equivalence to the
+current central library and correctness against a manufacturer pinout are not claimed.
+
+The report distinguishes explicit physical numbers, blank numbers resolved by a
+unique complete slot, shared physical pins across units, and non-symbol supply pins
+without graphical live endpoints. Multiple candidate slots remain ambiguous; local
+net names are not used to guess a slot. Conflicts return `needs_review` with observed
+pins and candidate slots. `unrepresented_symbol_slots` are reported separately from
+non-symbol supplies. Only selected live instances are corroborated, not every slot
+or pin in the entire design.
+
+Source PDB, protected library/PCB/configuration files, native executables, live
+instances, application identity and both exported graphs must remain unchanged
+during inspection. Drift rejects the read before a baseline is recorded. A changed
+PDB or exporter requires a fresh baseline. Export diagnostics or unsupported formats
+fail closed. DataConvert's observed exit code 1 is accepted only with silent,
+well-formed, complete output for the exact requested part. Each export process has
+a 25-second limit within the existing 180-second native / 270-second supervisor limits.
+
+Limits: at most four effective parts, sixteen selected live symbol instances, 128
+selected live pins and 10,000 scanned component objects; additional project PDB paths,
+direct bus-segment mappings and unsupported PDB structures are refused. These reads
+produce private evidence files, and the editor/database service may maintain its own
+auxiliary files. They do not promise every fixture byte remains unchanged.
+
+`write_authorized`, `full_design_pin_mapping_verified` and `full_erc_verified` remain
+false. Mapping evidence does not change existing edit or packaging preconditions;
+the older logical endpoint query still refuses ambiguous/shared or blank live numbers.
+
+```powershell
+python pads/smoke_pin_mapping.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2g --fixture .pads-runtime/p2g/fixture
+```
+
+The acceptance harness uses a prepared, configured, hosted test copy and a private
+close/reopen helper; it does not expose a new public lifecycle or write tool.
+See [P2 seventh acceptance](docs/p2g-acceptance.md).

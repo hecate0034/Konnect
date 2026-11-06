@@ -16,6 +16,8 @@ from runtime.schematic import Schematic
 
 
 def dispatch(name, args, sdd, state):
+    if name=='inspect_pads_pin_mapping':
+        return Schematic(sdd,state).inspect_pin_mapping(args['session_id'],args['design'],args['refdes'],args.get('baseline_id'))
     if name in ('preview_pads_packaging','execute_pads_packaging'):
         from runtime.packaging import Packaging
         service=Packaging(sdd,state)
@@ -73,6 +75,8 @@ def dispatch(name, args, sdd, state):
             logical_evidence=json.loads(logical_path.read_text(encoding='utf-8')) if logical_path.is_file() else None
             packaging_path=state/'evidence'/f'p2f-acceptance-{domain}.json'
             packaging_evidence=json.loads(packaging_path.read_text(encoding='utf-8')) if packaging_path.is_file() else None
+            mapping_path=state/'evidence'/f'p2g-acceptance-{domain}.json'
+            mapping_evidence=json.loads(mapping_path.read_text(encoding='utf-8')) if mapping_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -89,6 +93,8 @@ def dispatch(name, args, sdd, state):
                                  'recorded_logical_acceptance':logical_evidence,
                                  'bounded_packaging_verified':bool(packaging_evidence and packaging_evidence.get('status')=='passed'),
                                  'recorded_packaging_acceptance':packaging_evidence,
+                                 'selected_library_pin_mapping_verified':bool(mapping_evidence and mapping_evidence.get('status')=='passed'),
+                                 'recorded_pin_mapping_acceptance':mapping_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}

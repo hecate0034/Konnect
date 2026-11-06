@@ -104,7 +104,7 @@ def parse_sct(text):
         require(len(fields) == 4, "Unexpected SCT property layout")
         declared.add(ref)
     require(0 < len(declared) <= 5000, "Component count outside supported range")
-    components, all_pins, repeated = {}, set(), {}
+    components, all_pins, repeated, pin_labels = {}, set(), {}, {}
     for line in data["COMPPINS"]:
         m = re.fullmatch(r"(" + REF + r")\((.*)\)", line)
         require(m is not None, "Malformed SCT component pins")
@@ -128,6 +128,7 @@ def parse_sct(text):
             )
             labels[number] = label
         repeated[ref] = sorted({n for n in numbers if numbers.count(n) > 1})
+        pin_labels[ref] = labels
         components[ref] = sorted(set(numbers))
         all_pins.update((ref, n) for n in numbers)
     require(
@@ -183,7 +184,12 @@ def parse_sct(text):
         0 < len(nets) <= 10000 and set(nets).issubset(aliases),
         "Missing SCT nets or electrical declarations",
     )
-    return {"components": components, "nets": nets, "repeated": repeated}
+    return {
+        "components": components,
+        "nets": nets,
+        "repeated": repeated,
+        "pin_labels": pin_labels,
+    }
 
 
 def parse_allegro(text):
