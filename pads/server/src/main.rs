@@ -38,7 +38,23 @@ fn tool(
 }
 
 fn catalogue() -> Vec<Tool> {
+    let session = json!({"type":"string","pattern":"^[a-f0-9]{32}$"});
+    let target = json!({"type":"object","additionalProperties":false,"required":["design","sheet","uid","path","refdes"],"properties":{
+        "design":{"type":"string","minLength":1,"maxLength":256},"sheet":{"type":"string","minLength":1,"maxLength":256},
+        "uid":{"type":"string","minLength":1,"maxLength":256},"path":{"type":"string","minLength":1,"maxLength":256},
+        "refdes":{"type":"string","minLength":1,"maxLength":256}}});
+    let changes = json!({"type":"object","minProperties":1,"additionalProperties":false,"properties":{
+        "attribute":{"type":"object","additionalProperties":false,"required":["name","value"],"properties":{
+            "name":{"type":"string","enum":["Description","Value","Tolerance","Power","Cost"]},
+            "value":{"type":"string","minLength":1,"maxLength":1024}}},
+        "position":{"type":"object","additionalProperties":false,"required":["x","y","unit"],"properties":{
+            "x":{"type":"integer","minimum":0,"maximum":10000},"y":{"type":"integer","minimum":0,"maximum":10000},
+            "unit":{"const":"0.01_inch"}}}}});
     vec![
+        tool("inspect_pads_component", "edit", "Read one exact existing schematic component in the configured test copy, including attributes, coordinates and pin/net identities.", json!({"session_id":session,"target":target}), json!(["session_id","target"])),
+        tool("preview_pads_component_edit", "edit", "Preview an existing component instance attribute and/or position change. Test copies only; preview expires in ten minutes. Does not write the design.", json!({"session_id":session,"target":target,"changes":changes}), json!(["session_id","target","changes"])),
+        tool("execute_pads_component_edit", "edit", "Execute the exact single-use preview after rechecking native state. Designer persists immediately. Failures may leave partial changes; never blindly retry.", json!({"preview_id":session}), json!(["preview_id"])),
+        tool("reopen_pads_edit", "edit", "Close and reopen the configured test project after a successful edit, then verify persistence. Invalidates the old session; bind again. Not a generic save or library operation.", json!({"preview_id":session}), json!(["preview_id"])),
         tool("get_pads_environment", "environment", "Read installed PADS version and COM registrations. Does not activate an editor.", json!({}), json!([])),
         tool("get_pads_capabilities", "environment", "Read historical activation evidence; not proof of current connection or document editing support.", json!({}), json!([])),
         tool("list_pads_interface_members", "reference", "Search installed type-library members. Type information is not runtime verification.", json!({"domain":{"type":"string","enum":["designer","layout","cell","parts","padstack","library"]},"query":{"type":"string","minLength":1,"maxLength":100}}), json!(["domain","query"])),
@@ -93,16 +109,30 @@ impl Worker {
         let out = std::thread::spawn(move || read(Box::new(stdout)));
         let err = std::thread::spawn(move || read(Box::new(stderr)));
         let start = Instant::now();
+        // Edit preflight and native operation each have a 60 s subprocess limit.
+        // Do not kill their supervising worker before it can stop the native child.
+        let timeout = if [
+            "inspect_pads_component",
+            "preview_pads_component_edit",
+            "execute_pads_component_edit",
+            "reopen_pads_edit",
+        ]
+        .contains(&name)
+        {
+            150
+        } else {
+            90
+        };
         let status = loop {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 break status;
             }
-            if start.elapsed() > Duration::from_secs(90) {
+            if start.elapsed() > Duration::from_secs(timeout) {
                 child.kill().map_err(|e| e.to_string())?;
                 child.wait().map_err(|e| e.to_string())?;
                 let _ = out.join();
                 let _ = err.join();
-                return Err("read_worker_timeout".into());
+                return Err("worker_timeout_outcome_unknown".into());
             }
             std::thread::sleep(Duration::from_millis(10));
         };
@@ -132,6 +162,13 @@ fn failure(kind: &str, message: String) -> Value {
     serde_json::to_value(result).expect("serializable result")
 }
 
+fn backend_failure(value: Value) -> Value {
+    // Preserve write-attempt/unknown-outcome information from the native worker.
+    let mut result = CallToolResult::json(&value);
+    result.is_error = true;
+    serde_json::to_value(result).expect("serializable result")
+}
+
 fn handle(
     message: Value,
     tools: &[Tool],
@@ -155,7 +192,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.1.0"},"instructions":"Read-only development build. Manual/type-library evidence is not verified design-editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.2.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Native edits persist immediately. Manual/type-library evidence is not runtime verification."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -165,7 +202,7 @@ fn handle(
                 .map(|t| json!({"name":t.name,"description":t.description,"inputSchema":t.schema}))
                 .collect();
             list.push(json!({"name":"list_toolboxes","description":"List PADS tool groups and active state.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
-            list.push(json!({"name":"load_toolset","description":"Load one PADS tool group.","inputSchema":{"type":"object","properties":{"name":{"type":"string","enum":["environment","reference","session"]}},"required":["name"],"additionalProperties":false}}));
+            list.push(json!({"name":"load_toolset","description":"Load one PADS tool group.","inputSchema":{"type":"object","properties":{"name":{"type":"string","enum":["environment","reference","session","edit"]}},"required":["name"],"additionalProperties":false}}));
             json!({"tools":list})
         }
         "tools/call" => {
@@ -175,11 +212,11 @@ fn handle(
                 if args != json!({}) {
                     failure("invalid_argument", "No arguments accepted".into())
                 } else {
-                    serde_json::to_value(CallToolResult::json(&json!({"toolsets":[{"name":"environment","active":active.contains("environment")},{"name":"reference","active":active.contains("reference")},{"name":"session","active":active.contains("session")}]}))).unwrap()
+                    serde_json::to_value(CallToolResult::json(&json!({"toolsets":[{"name":"environment","active":active.contains("environment")},{"name":"reference","active":active.contains("reference")},{"name":"session","active":active.contains("session")},{"name":"edit","active":active.contains("edit")}]}))).unwrap()
                 }
             } else if name == "load_toolset" {
                 let group = args.get("name").and_then(Value::as_str).unwrap_or("");
-                if !["environment", "reference", "session"].contains(&group)
+                if !["environment", "reference", "session", "edit"].contains(&group)
                     || args.as_object().map(|a| a.len()) != Some(1)
                 {
                     failure("invalid_argument", "Expected one known toolset name".into())
@@ -197,14 +234,10 @@ fn handle(
                         Ok(v) if v.get("ok") == Some(&json!(true)) && v.get("data").is_some() => {
                             serde_json::to_value(CallToolResult::json(&v["data"])).unwrap()
                         }
-                        Ok(v) => failure(
-                            v["error"]["kind"].as_str().unwrap_or("backend_read_failed"),
-                            v["error"]["message"]
-                                .as_str()
-                                .unwrap_or("Backend response did not verify success")
-                                .into(),
+                        Ok(v) => backend_failure(v),
+                        Err(e) => backend_failure(
+                            json!({"error":{"kind":"backend_worker_failed","message":e},"project_write_attempted":null}),
                         ),
-                        Err(e) => failure("backend_read_failed", e),
                     }
                 }
             } else {
@@ -288,6 +321,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn edit_schemas_refuse_arbitrary_properties_and_noninteger_coordinates() {
+        let tools = catalogue();
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "preview_pads_component_edit")
+            .unwrap();
+        let target = json!({"design":"d","sheet":"s","uid":"i","path":"i","refdes":"R1"});
+        for changes in [
+            json!({}),
+            json!({"attribute":{"name":"Ref Designator","value":"R999"}}),
+            json!({"position":{"x":true,"y":10,"unit":"0.01_inch"}}),
+            json!({"position":{"x":1.5,"y":10,"unit":"0.01_inch"}}),
+            json!({"position":{"x":10,"y":10,"unit":"mm"}}),
+        ] {
+            assert!(!tool
+                .validator
+                .is_valid(&json!({"session_id":"a".repeat(32),"target":target,"changes":changes})));
+        }
+    }
+
+    #[test]
+    fn backend_failure_preserves_partial_and_unknown_write_outcomes() {
+        for attempted in [json!(true), Value::Null] {
+            let result = backend_failure(
+                json!({"error":{"kind":"native_edit_failed"},"project_write_attempted":attempted}),
+            );
+            let data: Value =
+                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(result["isError"], true);
+            assert_eq!(data["project_write_attempted"], attempted);
+            assert!(data.get("mutation_attempted").is_none());
+        }
+    }
     fn absent_worker() -> Worker {
         Worker {
             python: "missing.exe".into(),

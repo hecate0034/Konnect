@@ -1,4 +1,4 @@
-"""One read-only request per process; no arbitrary command or native activation."""
+"""One bounded request per process; no arbitrary command or native activation."""
 from __future__ import annotations
 
 import json
@@ -11,9 +11,17 @@ site.addsitedir(str(ROOT / '.pads-runtime/python'))
 from runtime.diagnostics import installation, registered_servers, fingerprint
 from runtime.reference import search, get_page
 from runtime.sessions import Sessions, PadsError
+from runtime.edits import Edits
 
 
 def dispatch(name, args, sdd, state):
+    if name in ('inspect_pads_component', 'preview_pads_component_edit', 'execute_pads_component_edit', 'reopen_pads_edit'):
+        edits = Edits(sdd, state)
+        if name == 'inspect_pads_component':
+            return edits.inspect(args['session_id'], args['target'])
+        if name == 'preview_pads_component_edit':
+            return edits.preview(args['session_id'], args['target'], args['changes'])
+        return edits.run(args['preview_id'], reopen=name == 'reopen_pads_edit')
     if name in ('bind_pads_session', 'get_pads_session', 'read_pads_project', 'validate_pads_snapshot', 'release_pads_session'):
         sessions = Sessions(sdd, state)
         if name == 'bind_pads_session':
@@ -36,13 +44,21 @@ def dispatch(name, args, sdd, state):
             evidence = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
             acceptance = state / 'evidence' / f'p1-acceptance-{domain}.json'
             read_evidence = json.loads(acceptance.read_text(encoding='utf-8')) if acceptance.is_file() else None
+            edit_path = state / 'evidence' / f'p2-acceptance-{domain}.json'
+            edit_evidence = json.loads(edit_path.read_text(encoding='utf-8')) if edit_path.is_file() else None
+            edit_passed = bool(edit_evidence and edit_evidence.get('status') == 'passed')
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
                                  'read_project_verified': bool(read_evidence and read_evidence.get('status') == 'passed'),
-                                 'write_verified': False})
+                                 'write_verified': False,
+                                 'bounded_test_edit_verified': edit_passed,
+                                 'verified_edit_scope': {'component': edit_evidence.get('target'),
+                                     'attribute': 'Description instance value', 'position_unit': '0.01_inch',
+                                     'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}
+                                     if edit_passed else None})
         return {'capabilities': capabilities, 'source_kind': 'recorded_probe_not_live_state',
-                'note': 'All acceptance evidence is historical and specific to the recorded fixture. It does not prove a live connection, general compatibility or writes.'}
+                'note': 'Historical fixture-specific evidence, not live state. General writes remain unverified; bounded_test_edit_verified covers only the listed test operation.'}
     if name == 'search_pads_reference':
         return search(state / 'reference.sqlite', args['query'], args.get('limit', 8))
     if name == 'get_pads_reference_page':
@@ -65,14 +81,18 @@ def dispatch(name, args, sdd, state):
 
 
 def main():
+    request = {}
     try:
         request = json.loads(sys.stdin.read(1024 * 1024))
         result = dispatch(request['name'], request['arguments'], Path(sys.argv[1]), Path(sys.argv[2]))
-        print(json.dumps({'ok': True, 'data': result}, ensure_ascii=False))
+        print(json.dumps(result if result.get('ok') is False else {'ok': True, 'data': result}, ensure_ascii=False))
     except PadsError as exc:
-        print(json.dumps({'ok': False, 'error': {'kind': exc.kind, 'message': str(exc)}, 'project_write_attempted': False}, ensure_ascii=False))
+        possible_write = request.get('name') in ('execute_pads_component_edit', 'reopen_pads_edit')
+        print(json.dumps({'ok': False, 'error': {'kind': exc.kind, 'message': str(exc)},
+                          'project_write_attempted': None if possible_write else False}, ensure_ascii=False))
     except Exception as exc:
-        print(json.dumps({'ok': False, 'error': {'kind': 'read_failed', 'message': str(exc)}}, ensure_ascii=False))
+        print(json.dumps({'ok': False, 'error': {'kind': 'worker_failed', 'message': str(exc)},
+                          'project_write_attempted': None}, ensure_ascii=False))
 
 
 if __name__ == '__main__':

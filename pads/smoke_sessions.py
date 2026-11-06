@@ -10,7 +10,7 @@ from runtime.diagnostics import fingerprint
 
 
 class Client:
-    def __init__(self, command):
+    def __init__(self, command, timeout=100):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW)
         self.messages = queue.Queue()
@@ -20,12 +20,13 @@ class Client:
         self.reader = threading.Thread(target=receive, daemon=True)
         self.reader.start()
         self.number = 0
+        self.timeout = timeout
 
     def request(self, method, params=None):
         self.number += 1
         self.process.stdin.write(json.dumps({'jsonrpc':'2.0','id':self.number,'method':method,'params':params or {}})+'\n')
         self.process.stdin.flush()
-        deadline = time.monotonic() + 100
+        deadline = time.monotonic() + self.timeout
         while True:
             response = self.messages.get(timeout=max(0.1, deadline-time.monotonic()))
             if response.get('id') == self.number:

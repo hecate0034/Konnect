@@ -12,7 +12,17 @@ from runtime.native_layout import process_identity
 from runtime.sessions import PadsError
 
 
-def read(request):
+def call(obj, name, *args):
+    import pythoncom
+    import win32com.client
+    # VX.2.4 marks some zero-argument methods inconsistently for late binding.
+    value = obj._oleobj_.Invoke(obj._oleobj_.GetIDsOfNames(name), 0, pythoncom.DISPATCH_METHOD, True, *args)
+    if isinstance(value, pythoncom.TypeIIDs[pythoncom.IID_IDispatch]):
+        return win32com.client.Dispatch(value)
+    return value
+
+
+def connect(request):
     import pythoncom
     import win32com.client
     pythoncom.CoInitialize()
@@ -27,13 +37,6 @@ def read(request):
     if len(candidates) != 1:
         raise PadsError('application_ambiguous', 'Multiple Designer instances; leave one accessible instance before binding')
     app = win32com.client.Dispatch(table.GetObject(candidates[0]).QueryInterface(pythoncom.IID_IDispatch))
-    def call(obj, name, *args):
-        # VX.2.4 marks some zero-argument methods inconsistently for late binding.
-        value = obj._oleobj_.Invoke(obj._oleobj_.GetIDsOfNames(name), 0, pythoncom.DISPATCH_METHOD, True, *args)
-        if isinstance(value, pythoncom.TypeIIDs[pythoncom.IID_IDispatch]):
-            return win32com.client.Dispatch(value)
-        return value
-
     def identity():
         handle = int(app.ActiveViewHandle) & 0xffffffff
         if not handle:
@@ -49,6 +52,11 @@ def read(request):
             raise PadsError('session_disconnected', 'Application instance changed; bind a new session')
         return result
 
+    return app, identity
+
+
+def read(request):
+    app, identity = connect(request)
     before = identity()
     inventory = None
     if request['inventory']:

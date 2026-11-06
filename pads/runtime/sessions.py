@@ -174,7 +174,9 @@ class Sessions:
                 'scope': current['snapshot_scope'], 'note': 'A read-time comparison, not a write transaction or geometry/netlist guarantee.'}
 
     def release(self, session_id):
-        self.load(session_id)
-        with self.db() as db:
-            db.execute("UPDATE sessions SET state='released',reason='explicit_release' WHERE id=? AND state='active'", (session_id,))
+        from .locking import edit_lock
+        with edit_lock(self.state):
+            self.load(session_id)
+            with self.db() as db:
+                db.execute("UPDATE sessions SET state='released',reason='explicit_release' WHERE id=? AND state='active'", (session_id,))
         return {'session_id': session_id, 'state': 'released', 'application_closed': False, 'project_write_attempted': False}

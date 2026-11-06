@@ -46,7 +46,7 @@ Ten PADS tools are available:
 | Tool | Purpose |
 | --- | --- |
 | `get_pads_environment` | Installed product, COM registration and binary architecture |
-| `get_pads_capabilities` | Historical activation and fixture-read evidence; writes remain unverified |
+| `get_pads_capabilities` | Historical activation/read evidence and explicitly scoped test-edit evidence |
 | `list_pads_interface_members` | Member names and parameter names from the installed type library |
 | `search_pads_reference` | Search all three local PDFs with page and source fingerprint |
 | `get_pads_reference_page` | Retrieve a complete PDF page |
@@ -88,7 +88,8 @@ Rust toolchain. Launch the executable with four existing absolute paths:
 
 Transport is newline-delimited JSON-RPC over standard input/output, protocol
 version `2024-11-05`. Diagnostics belong on stderr. Each domain call uses a fresh
-Python worker with a 90-second deadline; native reads have a 60-second deadline.
+Python worker with a 90-second deadline for P1. P2 component tools allow 150 seconds
+for the supervisor, because session preflight and native editing each have a 60-second limit.
 A failure is returned as an
 MCP tool error, never as successful empty data. Startup arguments are trusted
 local configuration; callers cannot replace the worker or installation path.
@@ -151,6 +152,86 @@ and observed limitations.
 5. P4: selected existing objects in a test library, dependency and readback checks.
 6. P5: packaged skills and three repeatable end-to-end acceptance scenarios.
 
-Do not enable unverified writes in the public MCP catalogue. Library creation or
-derivation requires a concrete candidate selection under the user's existing
-reuse policy. Production GLK writes are outside test execution.
+General design writes remain disabled. P2 adds only the bounded test-copy tools
+below. Library creation or derivation requires a concrete candidate selection
+under the user's existing reuse policy. Production GLK writes are outside test execution.
+
+## Bounded schematic edits (P2 first increment)
+
+Four additional tools are available through `load_toolset {"name":"edit"}`:
+
+| Tool | Purpose |
+| --- | --- |
+| `inspect_pads_component` | Read one exact existing component's position, attributes and pin/net identities |
+| `preview_pads_component_edit` | Persist a before/after preview locally, without changing the design |
+| `execute_pads_component_edit` | Consume one preview, recheck state, write and read back |
+| `reopen_pads_edit` | Close/reopen the test project and verify the recorded after-state; invalidate the old binding |
+
+These tools support Designer COM 66 only. Editing is off until a developer configures
+one prepared, disposable fixture inside the runtime state directory:
+
+```powershell
+python pads/prepare_fixture.py --source D:/MentorGraphics/PADSProVX.2.4/SDD_HOME/Documentation/PADS_Professional_Eval --target D:/Codes/Project/pads-automation/.pads-runtime/p2-fixture
+python pads/configure_fixture_edits.py --state .pads-runtime --fixture .pads-runtime/p2-fixture
+python pads/launch_fixture.py --domain designer --sdd-home D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --fixture .pads-runtime/p2-fixture --state .pads-runtime/p2-host
+```
+
+Wait for the host's `opened` status. Existing fixture/policy paths are not overwritten.
+The local policy is not an MCP tool or a security sandbox: someone who edits local
+configuration/code can change it. Each operation checks the exact project, manifest,
+linked paths and native database/library locations. Never configure production copies.
+Use one state directory for a fixture; locks do not coordinate separate deployments.
+
+Bind the open test project, then choose an existing physical component from
+`read_pads_project`. Target fields are all required: `design`, `sheet`, `uid`, `path`,
+`refdes`. A reference designator alone is insufficient. One preview can contain an
+existing attribute and/or absolute x/y coordinates:
+
+```json
+{
+  "session_id": "<bound session id>",
+  "target": {"design":"CORPORATE","sheet":"control_buffers","uid":"$5I134","path":"$5I134","refdes":"R24"},
+  "changes": {
+    "attribute": {"name":"Description","value":"P2 test copy"},
+    "position": {"x":580,"y":500,"unit":"0.01_inch"}
+  }
+}
+```
+
+Allowed existing attribute names are Description, Value, Tolerance, Power and Cost.
+The adapter sets **InstanceValue** and preserves the base/library value; it does not
+create attributes. Native acceptance currently covers Description; other allowed
+names need their own real-project validation. Refdes, part, footprint, orientation,
+library objects and connections cannot be changed by this tool. Coordinates are
+integers in 1/100 inch (0.254 mm), bounded to 0..10000; no automatic grid snapping,
+sheet-boundary check or collision avoidance is promised.
+
+Review the returned `before`/`after`, then pass its `preview_id` to execution. The
+preview expires after ten minutes and can be executed once. Attributes, base and
+instance values, coordinates, orientation, symbol name and component pin/net
+identities must still match. Other sheet objects, wire geometry and ERC are outside
+this comparison. Native editing is not an atomic transaction; avoid manual editing
+or switching projects while the call runs. A failed setter can leave partial changes.
+
+Designer stores schematic edits in its database immediately. `SchematicSheetDocument.Save`
+is for embedded symbol editing, so this implementation deliberately does not call it.
+Persistence is verified by native `CloseProject` / `OpenProject` and independent
+readback. Reopen only uses an already existing sheet. It leaves the editor running
+and requires a new binding afterward. This is a project-close/reopen check, not a
+power-loss/durability test or whole-process restart guarantee.
+
+On timeout/partial failure, the preview remains consumed and the binding is invalidated;
+inspect the disposable project and bind again. There is no automatic retry or rollback.
+Native failure results retain whether a write was attempted (`true`, `false`, or
+`null` when unknown). Successful scope is reported by `bounded_test_edit_verified`;
+`write_verified` remains false for unrestricted editing.
+
+Repeatable acceptance changes R24's Description and moves it +10 native units on x:
+
+```powershell
+python pads/smoke_edits.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime --fixture .pads-runtime/p2-fixture
+```
+
+It intentionally leaves the modified test copy for review. Results and recovery
+limits are recorded in [P2 acceptance](docs/p2-acceptance.md). P2 placement and
+pin-connection creation, P3 PCB edits and P4 library writes are still pending.
