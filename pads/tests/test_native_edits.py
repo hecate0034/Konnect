@@ -34,11 +34,16 @@ def native_context(tmp_path, monkeypatch):
                            FindAttribute=lambda name: attr, SetLocation=move)
     app = SimpleNamespace(GetProjectData=lambda: SimpleNamespace(iCDBDir=str(tmp_path), CentralLibraryPath=str(tmp_path)),
                           IsReadOnlyMode=lambda: False)
+    grid=[10]
+    app.ParamGetValue=lambda index:grid[0]
+    app.ParamSetValue=lambda index,value:grid.__setitem__(0,value)
     monkeypatch.setattr(native_edit, 'check_fixture', lambda policy, path: tmp_path)
     monkeypatch.setattr(native_edit, 'connect', lambda request: (app, lambda: {'identity': 'fixed'}))
     monkeypatch.setattr(native_edit, 'locate', lambda app, target: item)
     monkeypatch.setattr(native_edit, 'component_state', lambda item, target: copy.deepcopy(current))
     monkeypatch.setattr(native_edit, 'call', lambda obj, name, *args: getattr(obj, name)(*args))
+    from runtime import native_geometry
+    monkeypatch.setattr(native_geometry, 'call', lambda obj, name, *args: getattr(obj, name)(*args))
     changes = {'attribute': {'name': 'Description', 'value': 'changed'},
                'position': {'x': 20, 'y': 20, 'unit': '0.01_inch'}}
     request = {'action': 'execute', 'com_version': '66', 'policy': {}, 'expected_path': 'unused', 'target': {},
@@ -94,3 +99,18 @@ def test_invalid_approved_state_and_external_database_are_refused(native_context
     app.GetProjectData = lambda: SimpleNamespace(iCDBDir=str(tmp_path.parent), CentralLibraryPath=str(tmp_path))
     assert native_edit.operate(request)['error']['kind'] == 'write_scope_denied'
     assert writes == []
+
+
+def test_raw_invoke_unwraps_native_pin_arguments():
+    from runtime.native_designer import call
+    received=[]
+    class Ole:
+        def GetIDsOfNames(self,name):return 7
+        def Invoke(self,*args):
+            received.append(args)
+            return 'native-result'
+    obj=SimpleNamespace(_oleobj_=Ole())
+    native_pin=object()
+    pin=SimpleNamespace(_oleobj_=native_pin)
+    assert call(obj,'AddNet',0,pin)=='native-result'
+    assert received[0][-1] is native_pin

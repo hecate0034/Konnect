@@ -1,5 +1,6 @@
 # Acceptance harness only. Opens the copied official sample, outside MCP tools.
-param([ValidateSet('designer','layout')][string]$Domain, [string]$Fixture, [string]$Control)
+param([ValidateSet('designer','layout')][string]$Domain, [string]$Fixture, [string]$Control,
+      [ValidateRange(1,120)][int]$LifetimeMinutes=20)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $processName = if ($Domain -eq 'designer') {'viewdraw'} else {'ExpeditionPE'}
@@ -23,7 +24,7 @@ try {
     }
     else { [void]$app.OpenDocument((Join-Path $Fixture 'LessonFinal/PCB/CORPORATE.pcb')) }
     @{stage='opened'; domain=$Domain} | ConvertTo-Json -Compress
-    $deadline=[DateTime]::UtcNow.AddMinutes(20)
+    $deadline=[DateTime]::UtcNow.AddMinutes($LifetimeMinutes)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $Control) {
             $command=Get-Content -LiteralPath $Control -Raw

@@ -16,7 +16,9 @@ def call(obj, name, *args):
     import pythoncom
     import win32com.client
     # VX.2.4 marks some zero-argument methods inconsistently for late binding.
-    value = obj._oleobj_.Invoke(obj._oleobj_.GetIDsOfNames(name), 0, pythoncom.DISPATCH_METHOD, True, *args)
+    # Raw Invoke needs native IDispatch arguments (e.g. AddNet's component pins).
+    native_args = tuple(getattr(arg, '_oleobj_', arg) for arg in args)
+    value = obj._oleobj_.Invoke(obj._oleobj_.GetIDsOfNames(name), 0, pythoncom.DISPATCH_METHOD, True, *native_args)
     if isinstance(value, pythoncom.TypeIIDs[pythoncom.IID_IDispatch]):
         return win32com.client.Dispatch(value)
     return value

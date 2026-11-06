@@ -13,6 +13,7 @@ if __name__ == '__main__':
     p.add_argument('--sdd-home', type=Path, required=True)
     p.add_argument('--fixture', type=Path, required=True)
     p.add_argument('--state', type=Path, required=True)
+    p.add_argument('--lifetime-minutes', type=int, choices=range(1,121), default=20)
     a=p.parse_args()
     if installation(a.sdd_home)['com_version'] != '66':
         raise RuntimeError('Acceptance host is validated for COM version 66 only')
@@ -25,7 +26,8 @@ if __name__ == '__main__':
         raise RuntimeError('stale fixture control file; inspect before reuse')
     command=[str(Path(os.environ['WINDIR'])/'SysWOW64/WindowsPowerShell/v1.0/powershell.exe'),
         '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(Path(__file__).with_name('fixture_host.ps1')),
-        '-Domain',a.domain,'-Fixture',str(a.fixture.resolve()),'-Control',str(control)]
+        '-Domain',a.domain,'-Fixture',str(a.fixture.resolve()),'-Control',str(control),
+        '-LifetimeMinutes',str(a.lifetime_minutes)]
     with (state / (a.domain+'.log')).open('wb') as log:
         host=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=log,
             cwd=state,env=native_environment(a.sdd_home.resolve(),state),creationflags=subprocess.CREATE_NO_WINDOW)

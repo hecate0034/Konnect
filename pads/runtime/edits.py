@@ -62,11 +62,12 @@ def check_fixture(policy, path):
     return root
 
 
-def native_edit(sdd, state, request):
+def native_edit(sdd, state, request, driver='native_edit.py'):
     request = {**request, 'com_version': installation(sdd)['com_version']}
     try:
-        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).with_name('native_edit.py'))],
-                                input=json.dumps(request).encode('utf-8'), capture_output=True, timeout=60,
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__).with_name(driver))],
+                                input=json.dumps(request).encode('utf-8'), capture_output=True,
+                                timeout=180 if driver=='native_schematic.py' else 60,
                                 env=native_environment(sdd, state), creationflags=subprocess.CREATE_NO_WINDOW)
         response = json.loads(result.stdout.decode('utf-8-sig'))
         if result.returncode or not isinstance(response, dict):
@@ -215,5 +216,11 @@ def proposed_state(before, changes):
         matches[0]['instance_value'] = change['value']
         matches[0]['effective_value'] = change['value']
     if 'position' in changes:
-        after['position'] = changes['position'].copy()
+        if 'wire_geometry' in after:
+            from .geometry import move_geometry, wire_issues
+            move_geometry(after, changes['position'], after['wire_geometry'])
+            if wire_issues([after],after['wire_geometry']):
+                raise PadsError('geometry_invalid', 'Proposed move leaves a pin gap or collapsed wire')
+        else:
+            after['position'] = changes['position'].copy()
     return after

@@ -11,7 +11,7 @@ from runtime.edits import check_fixture, proposed_state, validate_target
 from runtime.sessions import PadsError
 
 
-def component_state(item, target):
+def component_state(item, target, geometry=True):
     point = call(item, 'GetLocation')
     attributes = [{'name': str(a.Name), 'base_value': str(a.Value),
                    'instance_value': str(a.InstanceValue), 'effective_value': str(a.EitherValue)}
@@ -22,11 +22,15 @@ def component_state(item, target):
         connections.append({'pin_uid': str(pin.UID), 'pin_name': str(call(pin, 'GetName', 1)),
                             'net_uid': str(net.UID) if net else None,
                             'net_name': str(net.LogicalNetName) if net else None})
-    return {'target': target, 'symbol': str(call(item.SymbolBlock, 'GetName', 0)),
+    result = {'target': target, 'symbol': str(call(item.SymbolBlock, 'GetName', 0)),
             'position': {'x': int(point.X), 'y': int(point.Y), 'unit': '0.01_inch'},
             'orientation': int(item.Orientation),
             'attributes': sorted(attributes, key=lambda a: (a['name'], a['base_value'], a['instance_value'])),
             'connections': sorted(connections, key=lambda c: json.dumps(c, sort_keys=True))}
+    if geometry:
+        from runtime.native_geometry import component_geometry
+        result.update(component_geometry(item))
+    return result
 
 
 def locate(app, target):
@@ -87,7 +91,9 @@ def operate(request):
                     raise PadsError('target_changed', 'Target changed after attribute write; position was not modified')
             if 'position' in changes:
                 pos = changes['position']
-                call(item, 'SetLocation', pos['x'], pos['y'])
+                from runtime.native_geometry import exact_grid
+                with exact_grid(app):
+                    call(item, 'SetLocation', pos['x'], pos['y'])
             actual = component_state(item, target)
         elif action == 'reopen':
             # Schematic edits are stored immediately in iCDB. Sheet.Save is ESE-only.

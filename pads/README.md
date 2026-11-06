@@ -203,14 +203,16 @@ The adapter sets **InstanceValue** and preserves the base/library value; it does
 create attributes. Native acceptance currently covers Description; other allowed
 names need their own real-project validation. Refdes, part, footprint, orientation,
 library objects and connections cannot be changed by this tool. Coordinates are
-integers in 1/100 inch (0.254 mm), bounded to 0..10000; no automatic grid snapping,
-sheet-boundary check or collision avoidance is promised.
+integers in 1/100 inch (0.254 mm), bounded to 0..10000. Writes temporarily use a
+fine native grid setting and restore the previous setting. The raw grid parameter
+is not equated to the coordinate unit. No sheet-boundary check is promised.
 
 Review the returned `before`/`after`, then pass its `preview_id` to execution. The
 preview expires after ten minutes and can be executed once. Attributes, base and
 instance values, coordinates, orientation, symbol name and component pin/net
-identities must still match. Other sheet objects, wire geometry and ERC are outside
-this comparison. Native editing is not an atomic transaction; avoid manual editing
+identities, pin coordinates and attached wire geometry must still match. Other sheet
+objects and ERC are outside this older component-only comparison; prefer the new
+sheet-level tools below. Native editing is not an atomic transaction; avoid manual editing
 or switching projects while the call runs. A failed setter can leave partial changes.
 
 Designer stores schematic edits in its database immediately. `SchematicSheetDocument.Save`
@@ -232,6 +234,100 @@ Repeatable acceptance changes R24's Description and moves it +10 native units on
 python pads/smoke_edits.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime --fixture .pads-runtime/p2-fixture
 ```
 
-It intentionally leaves the modified test copy for review. Results and recovery
-limits are recorded in [P2 acceptance](docs/p2-acceptance.md). P2 placement and
-pin-connection creation, P3 PCB edits and P4 library writes are still pending.
+That first-increment script intentionally leaves its modified test copy for review.
+Its historical results are recorded in [P2 first acceptance](docs/p2-acceptance.md).
+
+## P2 second increment: recorded sheet changes and recovery
+
+The `edit` toolset now also contains five tools (19 domain tools in total):
+
+| Tool | Purpose |
+| --- | --- |
+| `inspect_pads_sheet` | Read recorded component, pin and wire state on one existing sheet |
+| `preview_pads_schematic_change` | Preview an `edit`, `place` or `connect` operation |
+| `execute_pads_schematic_change` | Consume a preview once, execute and verify its allowed delta |
+| `preview_pads_schematic_recovery` | Preview the inverse of an observed, still-current change |
+| `reopen_pads_schematic_change` | Close/open the project and compare persisted state |
+
+These tools require the same configured disposable fixture and a bound Designer
+session. Supply `session_id`, `design`, `sheet` and `operation` for a preview.
+The `edit` operation wraps the existing exact `target` and `changes` described above.
+For placement, select an existing component on the same sheet as the reuse source:
+
+```json
+{
+  "kind": "place",
+  "source": {"design":"CORPORATE","sheet":"Powersupply","uid":"$11I16","path":"$11I16","refdes":"C2"},
+  "refdes": "C900",
+  "position": {"x":300,"y":200,"unit":"0.01_inch"}
+}
+```
+
+The preview identifies the existing symbol partition, symbol, part and cell metadata.
+It checks an explicit new reference designator across the design. Placement creates
+a design instance of that symbol, preserving effective source properties and pin
+numbers. It does not create library objects or independently validate library part
+packaging. The source must be unrotated, with numbered pins and complete reuse metadata.
+
+Connection operations have the shape below. Obtain each complete `target` and
+`pin_uid` from an inspection or successful placement result; do not guess UIDs:
+
+```json
+{
+  "kind": "connect",
+  "a": {"target":{"design":"CORPORATE","sheet":"Powersupply","uid":"<C900 UID>","path":"<C900 path>","refdes":"C900"},"pin_uid":"<first pin UID>"},
+  "b": {"target":{"design":"CORPORATE","sheet":"Powersupply","uid":"<C901 UID>","path":"<C901 path>","refdes":"C901"},"pin_uid":"<second pin UID>"}
+}
+```
+
+Replace all angle-bracket placeholders with values returned by inspection. Both pins
+must be free, numbered and on different components of the same sheet. Only one
+nonzero horizontal/vertical segment is supported. Existing wires, unrelated pins
+and component-body intersections are refused. The returned net must be unnamed,
+have the exact two pin attachments and expected segment, with other recorded state
+unchanged. Moves of connected components must preserve straight parallel wire
+segments; moves requiring native rerouting are refused before writing.
+
+The sheet comparison records component identities, properties, orientation, bounding
+boxes, pin identities/coordinates/connections, net identities/names, segment endpoints,
+joint types and bus flags. It explicitly excludes the automatically updated
+`@DATETIME` property of objects without reference designators. It does not cover all
+text/artwork, labels, bus semantics, hierarchy or ERC. The inspection's geometry
+issues report only pin-to-endpoint gaps and zero-length segments, not a full DRC.
+Limits are 500 component objects and 2,000 net objects per sheet.
+
+Execution rechecks the entire recorded sheet, project identity, fixture policy and
+central-library descriptor fingerprint. Keep the copied library and editor unchanged
+while calls run; the descriptor fingerprint is not a recursive library lock. State
+directory locks serialize these tools but cannot lock manual GUI changes or workers
+using another state directory. A native sheet call has a 180-second limit; its MCP
+worker has 270 seconds. Older component edits retain their 60/150-second limits.
+
+Recovery is explicit: pass a successful or observed failed change's `preview_id` as
+`change_id` to `preview_pads_schematic_recovery`, review its before/target state,
+then execute the returned recovery preview with `execute_pads_schematic_change`.
+Recover later changes first (wire, last placed component, then earlier component).
+Any subsequent recorded-state difference refuses recovery. Known partial attribute/
+move results can be recovered; unknown timeout results and unrecognized partial
+placements/connections require inspection and are not blindly retried. Recovery
+itself can fail and is not an atomic rollback. Reopen invalidates its binding;
+bind again before the next operation. Recovery restores recorded logical/geometry
+state, not byte-identical database files.
+
+Repeatable acceptance on a fresh configured fixture runs edit/reopen/recovery,
+two placements, specified-pin connection, independent readback, reopen, reverse-order
+recovery, and a final reopen/baseline comparison:
+
+```powershell
+python pads/prepare_fixture.py --source D:/MentorGraphics/PADSProVX.2.4/SDD_HOME/Documentation/PADS_Professional_Eval --target .pads-runtime/p2b/fixture
+python pads/configure_fixture_edits.py --state .pads-runtime/p2b --fixture .pads-runtime/p2b/fixture
+python pads/launch_fixture.py --domain designer --sdd-home D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --fixture .pads-runtime/p2b/fixture --state .pads-runtime/p2b/host --lifetime-minutes 120
+python pads/smoke_schematic.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2b --fixture .pads-runtime/p2b/fixture
+```
+
+Wait for the fixture host to report `opened` before starting acceptance. Existing
+fixture/policy paths are not overwritten. The script restores its recorded baseline
+and verifies source files plus the copied library/PCB hashes. See
+[P2 second acceptance](docs/p2b-acceptance.md) for measured results and known limits.
+General multi-segment/existing-net connections and full P2 electrical validation,
+P3 PCB edits and P4 library writes remain pending.

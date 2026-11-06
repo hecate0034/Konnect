@@ -50,7 +50,19 @@ fn catalogue() -> Vec<Tool> {
         "position":{"type":"object","additionalProperties":false,"required":["x","y","unit"],"properties":{
             "x":{"type":"integer","minimum":0,"maximum":10000},"y":{"type":"integer","minimum":0,"maximum":10000},
             "unit":{"const":"0.01_inch"}}}}});
+    let endpoint = json!({"type":"object","additionalProperties":false,"required":["target","pin_uid"],"properties":{"target":target,"pin_uid":{"type":"string","minLength":1,"maxLength":256}}});
+    let operation = json!({"oneOf":[
+        {"type":"object","additionalProperties":false,"required":["kind","target","changes"],"properties":{"kind":{"const":"edit"},"target":target,"changes":changes}},
+        {"type":"object","additionalProperties":false,"required":["kind","source","position","refdes"],"properties":{"kind":{"const":"place"},"source":target,"position":changes["properties"]["position"],"refdes":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,31}$"}}},
+        {"type":"object","additionalProperties":false,"required":["kind","a","b"],"properties":{"kind":{"const":"connect"},"a":endpoint,"b":endpoint}}
+    ]});
+    let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("inspect_pads_sheet", "edit", "Read component/pin positions, instance attributes and all wire endpoints on one existing test-copy sheet. Reports pin endpoint gaps; not full ERC.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name}), json!(["session_id","design","sheet"])),
+        tool("preview_pads_schematic_change", "edit", "Preview one sheet-level edit, placement reusing an exact existing component, or a single straight wire between two free numbered pins. Test copies only. Rejects collisions and net merging.", json!({"session_id":session,"design":sheet_name,"sheet":sheet_name,"operation":operation}), json!(["session_id","design","sheet","operation"])),
+        tool("execute_pads_schematic_change", "edit", "Consume a sheet change or recovery preview once, check entire recorded sheet state, execute and verify the exact geometry/connectivity delta. Native writes persist immediately.", json!({"preview_id":session}), json!(["preview_id"])),
+        tool("preview_pads_schematic_recovery", "edit", "Preview reversing a recorded supported change only if the sheet still matches its observed result. Refuses overwriting later edits. Unknown outcomes require inspection.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
+        tool("reopen_pads_schematic_change", "edit", "Close/reopen the configured test project after an executed sheet change or recovery and compare all recorded sheet geometry, properties and pin/net identities. Invalidates session.", json!({"session_id":session,"change_id":session}), json!(["session_id","change_id"])),
         tool("inspect_pads_component", "edit", "Read one exact existing schematic component in the configured test copy, including attributes, coordinates and pin/net identities.", json!({"session_id":session,"target":target}), json!(["session_id","target"])),
         tool("preview_pads_component_edit", "edit", "Preview an existing component instance attribute and/or position change. Test copies only; preview expires in ten minutes. Does not write the design.", json!({"session_id":session,"target":target,"changes":changes}), json!(["session_id","target","changes"])),
         tool("execute_pads_component_edit", "edit", "Execute the exact single-use preview after rechecking native state. Designer persists immediately. Failures may leave partial changes; never blindly retry.", json!({"preview_id":session}), json!(["preview_id"])),
@@ -112,6 +124,16 @@ impl Worker {
         // Edit preflight and native operation each have a 60 s subprocess limit.
         // Do not kill their supervising worker before it can stop the native child.
         let timeout = if [
+            "inspect_pads_sheet",
+            "preview_pads_schematic_change",
+            "execute_pads_schematic_change",
+            "preview_pads_schematic_recovery",
+            "reopen_pads_schematic_change",
+        ]
+        .contains(&name)
+        {
+            270
+        } else if [
             "inspect_pads_component",
             "preview_pads_component_edit",
             "execute_pads_component_edit",
@@ -192,7 +214,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.2.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Native edits persist immediately. Manual/type-library evidence is not runtime verification."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.3.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -321,6 +343,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sheet_operations_require_explicit_sources_and_pin_identities() {
+        let tools = catalogue();
+        let schema = &tools
+            .iter()
+            .find(|t| t.name == "preview_pads_schematic_change")
+            .unwrap()
+            .validator;
+        let target = json!({"design":"d","sheet":"s","uid":"i","path":"i","refdes":"R1"});
+        for operation in [
+            json!({"kind":"delete","target":target}),
+            json!({"kind":"connect","a":{"target":target},"b":{"target":target,"pin_uid":"p"}}),
+            json!({"kind":"place","source":target,"position":{"x":10,"y":10,"unit":"0.01_inch"},"refdes":"R2","library":"arbitrary"}),
+        ] {
+            assert!(!schema.is_valid(
+                &json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","operation":operation})
+            ));
+        }
+        assert!(schema.is_valid(&json!({"session_id":"a".repeat(32),"design":"d","sheet":"s","operation":{"kind":"connect","a":{"target":target,"pin_uid":"p1"},"b":{"target":target,"pin_uid":"p2"}}})));
+    }
     #[test]
     fn edit_schemas_refuse_arbitrary_properties_and_noninteger_coordinates() {
         let tools = catalogue();
