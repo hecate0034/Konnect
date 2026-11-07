@@ -9,12 +9,13 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.8.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.9.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
 connectivity/electrical native profiles, and selected global/hierarchical pin checks
 using fresh native netlist exports with baseline comparison, plus selected effective
-project-library pin mapping evidence. There are 24 domain tools. Full ERC, PCB writes
+project-library pin mapping evidence and nonempty backannotation impact previews.
+There are 25 domain tools. Full ERC, PCB writes
 and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
@@ -621,3 +622,70 @@ python pads/smoke_pin_mapping.py --server pads/server/target/debug/pads-automati
 The acceptance harness uses a prepared, configured, hosted test copy and a private
 close/reopen helper; it does not expose a new public lifecycle or write tool.
 See [P2 seventh acceptance](docs/p2g-acceptance.md).
+
+## Nonempty backannotation impact preview (P2h)
+
+`preview_pads_backannotation` takes `session_id`, an existing `design`, optional
+`mode` (`add` by default, or `repackage_unfixed`), and optional `baseline_id`.
+It uses the configured test copy and always runs fixed native `-Add -NoFill -y`
+commands with private working PDBs. `repackage_unfixed` adds `-r` and can propose
+extensive renumbering and changes to package unit assignments. No arbitrary BAM,
+executable path, options or application operation is accepted.
+
+```json
+{"session_id":"<bound session>","design":"CORPORATE","mode":"repackage_unfixed"}
+```
+
+The report's `impact_id` is a historical inspection record, **not** a packaging
+execution token. Supplying it to `execute_pads_packaging` is refused. Existing
+empty-BAM-only execution restrictions are unchanged. No BAM is applied here.
+
+The bounded BAM reader supports native `CHANGE ... INSTANCE`, `SELECT COMP`,
+reference parameter 15, physical `PIN_PARAM ... 4`, deletion of fixed parameter 23,
+and assignments to `Part Name`, `Part Label` and `Tolerance`. Unknown commands,
+duplicate selections/assignments, unsupported values and incomplete records fail
+closed. Native log reference/pin change counts must match the parsed records.
+Limits are 1 MiB per BAM/log, 512 selected instances, 256 pin changes and 1,000
+scanned component objects. Other versions/formats and extra project PDB paths have
+not been enabled. Each native preflight is limited to 40 seconds within the existing
+180-second native worker and 270-second supervisor limits.
+
+Full hierarchical scope and native UID identify each affected instance. Comments
+about old references/pins are cross-checked with live state, SCT physical-pin names,
+and clean SCT/Allegro graph membership. The report lists component changes, proposed
+package splits/merges, pins, property assignments, fixed-flag deletions and projected
+network membership changes. Such membership changes often mean a changed reference
+or pin label on the same wire; they are not proof of a new electrical connection.
+Shared/hidden pins in split packages remain explicitly unresolved where the
+available evidence cannot identify a unique destination. `network_impact.complete`
+means projection coverage only; post-execution connectivity is always unverified.
+
+Two native proposals are retained. On this installation, repeated repackaging can
+select different units/slots even with unchanged observed source state. The report
+therefore includes `repeatability.identical` and every changed candidate instance.
+An unstable proposal is useful inspection evidence and an explicit execution/recovery
+blocker. It is never presented as the result a later native execution must reproduce.
+The source design must already yield clean packaged SCT/Allegro baseline exports;
+this tool does not treat an unpackaged fallback export as a valid baseline.
+
+Before/after checks cover live instance identities and the three observed properties,
+the first proposal's affected physical pins, clean exported graphs/labels, tool hashes,
+application/project identity and protected library/PCB/PDB/configuration files.
+Changes reject the read and preserve failure evidence; uncertain outcomes invalidate
+the session. This does not check every geometric field or every fixed/override flag.
+The packager writes auxiliary project reports and private PDB/output files, so this
+is a **no-schematic-update preflight**, not a filesystem read-only operation.
+
+Recovery is reported as conditions, not an implemented inverse: a complete closed
+project/library checkpoint, exact preimages and identities, package/slot/shared-pin
+proof, collision-safe renaming, fixed-flag and instance-override ownership, independent
+readback and native graph/reopen comparisons. The preview does not create the checkpoint.
+An unchanged effective property value does not establish identical override ownership.
+`executable_preview`, `write_authorized` and `recovery_verified` remain false.
+
+```powershell
+python pads/smoke_backannotation.py --server pads/server/target/debug/pads-automation.exe --python C:/Users/m/AppData/Local/Programs/Python/Python313/python.exe --sdd D:/MentorGraphics/PADSProVX.2.4/SDD_HOME --state .pads-runtime/p2h --fixture .pads-runtime/p2h/fixture
+```
+
+See [P2 eighth acceptance](docs/p2h-acceptance.md). Stabilizing a bounded candidate and
+validating the missing restoration preimages must precede any nonempty execution.

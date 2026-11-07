@@ -378,6 +378,10 @@ def operate(request):
                 )
         library_sha = fingerprint(Path(data.CentralLibraryPath))
         design, sheet = request["design"], request["sheet"]
+        if request["action"] == "backannotation_preview":
+            from runtime.native_backannotation import preview
+
+            return preview(app, request, identity, initial)
         if request["action"] == "pin_mapping":
             from runtime.native_pin_mapping import inspect as inspect_mapping
 

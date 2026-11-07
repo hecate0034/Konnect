@@ -61,6 +61,7 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("preview_pads_backannotation", "edit", "Inspect fixed BAM-only Add/NoFill proposals, optionally repackaging unfixed symbols. Reports reference, pin, property, projected network changes and unverified recovery conditions. Writes auxiliary files in a configured test copy; never applies BAM or creates an executable preview.", json!({"session_id":session,"design":sheet_name,"mode":{"type":"string","enum":["add","repackage_unfixed"]},"baseline_id":session}), json!(["session_id","design"])),
         tool("inspect_pads_pin_mapping", "edit", "Read selected explicit/implicit pin mappings from the effective project PartsDB, live full instance paths and fresh native netlists. Reports unique slots, ambiguity, shared physical pins and non-symbol supply pins. Test copies only; no pin assignment or write authorization.", json!({"session_id":session,"design":sheet_name,"refdes":{"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,63}$"}},"baseline_id":session}), json!(["session_id","design","refdes"])),
         tool("preview_pads_packaging", "edit", "Preflight one recorded unconnected reused placement against a prior native logical baseline. Runs fixed Add/NoFill BAM-only packaging with a private working PDB. Auxiliary reports are written. Only empty BAM, unchanged existing assignments and explicit new pin numbers are accepted; no pin remapping/renumbering.", json!({"session_id":session,"change_id":session,"baseline_id":session}), json!(["session_id","change_id","baseline_id"])),
         tool("execute_pads_packaging", "edit", "Consume one packaging preview, repeat preflight, update the test-copy database, then verify fresh native netlists and unchanged assignments/sheet/protected files. Use the placement's existing reopen and guarded recovery tools. No PCB sync, library writes or arbitrary modes.", json!({"preview_id":session}), json!(["preview_id"])),
@@ -135,6 +136,7 @@ impl Worker {
             "check_pads_schematic",
             "inspect_pads_logical_connectivity",
             "inspect_pads_pin_mapping",
+            "preview_pads_backannotation",
             "preview_pads_packaging",
             "execute_pads_packaging",
             "inspect_pads_sheet",
@@ -227,7 +229,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.8.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.9.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -439,6 +441,30 @@ mod tests {
         }
         let mut invalid = base.clone();
         invalid["executable"] = json!("arbitrary");
+        assert!(!schema.is_valid(&invalid));
+    }
+    #[test]
+    fn backannotation_schema_exposes_only_bounded_preview_modes() {
+        let tools = catalogue();
+        let schema = &tools
+            .iter()
+            .find(|t| t.name == "preview_pads_backannotation")
+            .unwrap()
+            .validator;
+        let base = json!({"session_id":"a".repeat(32),"design":"CORPORATE"});
+        assert!(schema.is_valid(&base));
+        for mode in ["add", "repackage_unfixed"] {
+            let mut valid = base.clone();
+            valid["mode"] = json!(mode);
+            assert!(schema.is_valid(&valid));
+        }
+        for key in ["bam_file", "execute", "command", "output_dir"] {
+            let mut invalid = base.clone();
+            invalid[key] = json!("arbitrary");
+            assert!(!schema.is_valid(&invalid));
+        }
+        let mut invalid = base.clone();
+        invalid["mode"] = json!("apply");
         assert!(!schema.is_valid(&invalid));
     }
     #[test]

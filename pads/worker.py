@@ -16,6 +16,9 @@ from runtime.schematic import Schematic
 
 
 def dispatch(name, args, sdd, state):
+    if name=='preview_pads_backannotation':
+        from runtime.backannotation_service import Backannotation
+        return Backannotation(sdd,state).preview_impact(args['session_id'],args['design'],args.get('mode','add'),args.get('baseline_id'))
     if name=='inspect_pads_pin_mapping':
         return Schematic(sdd,state).inspect_pin_mapping(args['session_id'],args['design'],args['refdes'],args.get('baseline_id'))
     if name in ('preview_pads_packaging','execute_pads_packaging'):
@@ -77,6 +80,8 @@ def dispatch(name, args, sdd, state):
             packaging_evidence=json.loads(packaging_path.read_text(encoding='utf-8')) if packaging_path.is_file() else None
             mapping_path=state/'evidence'/f'p2g-acceptance-{domain}.json'
             mapping_evidence=json.loads(mapping_path.read_text(encoding='utf-8')) if mapping_path.is_file() else None
+            impact_path=state/'evidence'/f'p2h-acceptance-{domain}.json'
+            impact_evidence=json.loads(impact_path.read_text(encoding='utf-8')) if impact_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -95,6 +100,8 @@ def dispatch(name, args, sdd, state):
                                  'recorded_packaging_acceptance':packaging_evidence,
                                  'selected_library_pin_mapping_verified':bool(mapping_evidence and mapping_evidence.get('status')=='passed'),
                                  'recorded_pin_mapping_acceptance':mapping_evidence,
+                                 'backannotation_impact_preview_verified':bool(impact_evidence and impact_evidence.get('status')=='passed'),
+                                 'recorded_backannotation_impact_acceptance':impact_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}
@@ -129,7 +136,7 @@ def main():
         result = dispatch(request['name'], request['arguments'], Path(sys.argv[1]), Path(sys.argv[2]))
         print(json.dumps(result if result.get('ok') is False else {'ok': True, 'data': result}, ensure_ascii=False))
     except PadsError as exc:
-        possible_write = request.get('name') in ('execute_pads_component_edit', 'reopen_pads_edit',
+        possible_write = request.get('name') in ('preview_pads_backannotation', 'execute_pads_component_edit', 'reopen_pads_edit',
                                                'execute_pads_schematic_change','reopen_pads_schematic_change')
         print(json.dumps({'ok': False, 'error': {'kind': exc.kind, 'message': str(exc)},
                           'project_write_attempted': None if possible_write else False}, ensure_ascii=False))
