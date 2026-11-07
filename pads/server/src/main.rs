@@ -61,7 +61,10 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
-        tool("preview_pads_backannotation", "edit", "Inspect fixed BAM-only Add/NoFill proposals, optionally repackaging unfixed symbols. Reports reference, pin, property, projected network changes and unverified recovery conditions. Writes auxiliary files in a configured test copy; never applies BAM or creates an executable preview.", json!({"session_id":session,"design":sheet_name,"mode":{"type":"string","enum":["add","repackage_unfixed"]},"baseline_id":session}), json!(["session_id","design"])),
+        tool("create_pads_fixture_checkpoint", "edit", "Create a complete verified checkpoint of the configured disposable fixture. PADS editors must already be closed. Does not claim independent reopen verification.", json!({}), json!([])),
+        tool("preview_pads_fixture_restore", "edit", "Preview complete configured-fixture restoration from a local checkpoint while PADS editors are closed. Preserves current tree in quarantine; no arbitrary paths.", json!({"checkpoint_id":session}), json!(["checkpoint_id"])),
+        tool("execute_pads_fixture_restore", "edit", "Consume one closed-fixture restore preview. Verify all files, retain the old tree, restore the checkpoint, invalidate old bindings/previews. Reopen verification is separate.", json!({"preview_id":session}), json!(["preview_id"])),
+        tool("preview_pads_backannotation", "edit", "Inspect fixed BAM-only Add/NoFill proposals, optionally repackaging unfixed symbols. Reports reference, pin, property, projected network changes and unverified recovery conditions. Writes auxiliary files in a configured test copy; never applies BAM or creates an executable preview.", json!({"session_id":session,"design":sheet_name,"mode":{"type":"string","enum":["add","repackage_unfixed"]},"baseline_id":session,"scope_sheet":{"type":"string","pattern":"^[A-Za-z0-9_ -]{1,80}$"}}), json!(["session_id","design"])),
         tool("inspect_pads_pin_mapping", "edit", "Read selected explicit/implicit pin mappings from the effective project PartsDB, live full instance paths and fresh native netlists. Reports unique slots, ambiguity, shared physical pins and non-symbol supply pins. Test copies only; no pin assignment or write authorization.", json!({"session_id":session,"design":sheet_name,"refdes":{"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z][A-Za-z0-9_]{0,63}$"}},"baseline_id":session}), json!(["session_id","design","refdes"])),
         tool("preview_pads_packaging", "edit", "Preflight one recorded unconnected reused placement against a prior native logical baseline. Runs fixed Add/NoFill BAM-only packaging with a private working PDB. Auxiliary reports are written. Only empty BAM, unchanged existing assignments and explicit new pin numbers are accepted; no pin remapping/renumbering.", json!({"session_id":session,"change_id":session,"baseline_id":session}), json!(["session_id","change_id","baseline_id"])),
         tool("execute_pads_packaging", "edit", "Consume one packaging preview, repeat preflight, update the test-copy database, then verify fresh native netlists and unchanged assignments/sheet/protected files. Use the placement's existing reopen and guarded recovery tools. No PCB sync, library writes or arbitrary modes.", json!({"preview_id":session}), json!(["preview_id"])),
@@ -137,6 +140,9 @@ impl Worker {
             "inspect_pads_logical_connectivity",
             "inspect_pads_pin_mapping",
             "preview_pads_backannotation",
+            "create_pads_fixture_checkpoint",
+            "preview_pads_fixture_restore",
+            "execute_pads_fixture_restore",
             "preview_pads_packaging",
             "execute_pads_packaging",
             "inspect_pads_sheet",
@@ -229,7 +235,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.9.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.10.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -466,6 +472,30 @@ mod tests {
         let mut invalid = base.clone();
         invalid["mode"] = json!("apply");
         assert!(!schema.is_valid(&invalid));
+        let mut scoped = base.clone();
+        scoped["scope_sheet"] = json!("Powersupply");
+        assert!(schema.is_valid(&scoped));
+        scoped["scope_sheet"] = json!("power]-r");
+        assert!(!schema.is_valid(&scoped));
+    }
+    #[test]
+    fn checkpoint_tools_accept_only_opaque_ids_and_no_paths() {
+        let tools = catalogue();
+        for (name, key) in [
+            ("create_pads_fixture_checkpoint", None),
+            ("preview_pads_fixture_restore", Some("checkpoint_id")),
+            ("execute_pads_fixture_restore", Some("preview_id")),
+        ] {
+            let schema = &tools.iter().find(|t| t.name == name).unwrap().validator;
+            let mut args = json!({});
+            if let Some(key) = key {
+                assert!(!schema.is_valid(&args));
+                args[key] = json!("a".repeat(32));
+            }
+            assert!(schema.is_valid(&args));
+            args["path"] = json!("D:/arbitrary");
+            assert!(!schema.is_valid(&args));
+        }
     }
     #[test]
     fn pin_mapping_schema_limits_selection_and_has_no_write_options() {

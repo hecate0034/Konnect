@@ -18,7 +18,7 @@ def existing_editor(domain: str) -> list[int]:
     Refusing by name is conservative; never terminate processes by name.
     """
     name = {'designer': 'viewdraw.exe', 'layout': 'ExpeditionPE.exe',
-            'cell_application': 'CellEditor.exe'}.get(domain)
+              'cell_application': 'CellEditor.exe', 'library_manager': 'LibraryManager.exe'}.get(domain)
     if name is None:
         return []
     result = subprocess.run([str(Path(os.environ['WINDIR']) / 'System32/tasklist.exe'), '/FO', 'CSV', '/NH'],

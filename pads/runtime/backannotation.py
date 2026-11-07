@@ -8,7 +8,7 @@ from .logical import REF, NUMBER
 from .sessions import PadsError
 
 ATTRIBUTES = ("Part Name", "Part Label", "Tolerance")
-FORMAT = "pads_bam_impact_v1"
+FORMAT = "pads_bam_impact_v2"
 
 
 def require(ok, message):
@@ -154,7 +154,9 @@ def impact(records, live, observed_pins, graph, labels=None):
                     "before": old,
                     "proposed_value": value,
                     "effective_value_changes": old is None or old["effective"] != value,
-                    "instance_override_presence_verified": False,
+                    "instance_override_presence_verified": bool(
+                        old and old.get("presence_verified")
+                    ),
                 }
             )
         if record["delete_fixed"]:
@@ -164,7 +166,10 @@ def impact(records, live, observed_pins, graph, labels=None):
                     "uid": key[1],
                     "parameter": 23,
                     "operation": "delete",
-                    "preimage_verified": False,
+                    "before": row.get("frozen"),
+                    "preimage_verified": bool(
+                        row.get("frozen", {}).get("presence_verified")
+                    ),
                 }
             )
         for pin in record["pins"]:
@@ -252,9 +257,9 @@ def impact(records, live, observed_pins, graph, labels=None):
         if len(nets) > 1
     ]
     blockers = ["execution_and_inverse_not_implemented"] if records else []
-    if flags:
+    if any(not f["preimage_verified"] for f in flags):
         blockers.append("fixed_flag_preimage_unverified")
-    if attributes:
+    if any(not a["instance_override_presence_verified"] for a in attributes):
         blockers.append("attribute_override_ownership_unverified")
     if unresolved:
         blockers.append("incomplete_projected_network_membership")

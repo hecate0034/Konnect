@@ -187,6 +187,29 @@ def test_empty_native_proposal_needs_no_recovery_and_does_not_enable_writes():
     )
 
 
+def test_verified_absence_and_empty_overrides_remove_only_preimage_blockers():
+    from runtime.attribute_state import parse_batch, property_state, FROZEN
+
+    live, pins, graph = sample()
+    live[0]["frozen"] = property_state({}, {}, FROZEN)
+    live[0]["attributes"] = {
+        name: property_state(
+            parse_batch(f"0 {name}=res\r"), parse_batch(f"0 {name}=\r"), name
+        )
+        for name in ATTRIBUTES
+    }
+    value = impact(parse_bam(BAM), live, pins, graph)
+    assert value["recovery"]["blockers"] == ["execution_and_inverse_not_implemented"]
+    assert (
+        not value["execution_allowed"]
+        and not value["recovery"]["automatic_inverse_available"]
+    )
+    assert all(
+        a["before"]["instance_present"] and a["before"]["instance"] == ""
+        for a in value["attribute_assignments"]
+    )
+
+
 def test_exported_pin_name_must_agree_when_native_labels_are_provided():
     with pytest.raises(PadsError):
         impact(parse_bam(BAM), *sample(), {"R1": {"1": "other"}})
@@ -213,6 +236,16 @@ def test_service_baselines_never_enter_executable_packaging_table(context):
         sid, "d", "repackage_unfixed", record["impact_id"]
     )
     assert all(compared["comparison"].values())
+    expect(
+        "check_scope_mismatch",
+        lambda: service.preview_impact(
+            sid, "d", "repackage_unfixed", record["impact_id"], "s"
+        ),
+    )
+    expect(
+        "invalid_backannotation_scope",
+        lambda: service.preview_impact(sid, "d", "add", scope_sheet="s"),
+    )
     expect(
         "check_scope_mismatch",
         lambda: service.preview_impact(sid, "d", "add", record["impact_id"]),
@@ -277,6 +310,7 @@ def test_uncertain_preflight_preserves_failed_record_and_invalidates_session(
         "tool_changed",
         "timeout",
         "invalid_mode",
+        "ref_only",
     ],
 )
 def test_native_command_is_always_bam_only_and_requires_complete_evidence(
@@ -307,8 +341,10 @@ def test_native_command_is_always_bam_only_and_requires_complete_evidence(
         bam = Path(next(a[2:] for a in command if a.startswith("-b")))
         log = Path(next(a[2:] for a in command if a.startswith("-l")))
         if fault != "missing":
-            bam.write_text(BAM)
+            bam.write_text(BAM.split("  PIN_PARAM")[0] if fault == "ref_only" else BAM)
         message = SUCCESS
+        if fault == "ref_only":
+            message = message.replace(" and 1 pin\n number changes", "")
         if fault == "diagnostic":
             message += "\nWARNING: failed"
         if fault == "unexpected_write":
@@ -323,7 +359,7 @@ def test_native_command_is_always_bam_only_and_requires_complete_evidence(
         return SimpleNamespace(returncode=0, stdout=message.encode(), stderr=b"")
 
     monkeypatch.setattr(native.subprocess, "run", run)
-    if fault:
+    if fault and fault != "ref_only":
         with pytest.raises(PadsError):
             native.run_proposal(
                 project,
@@ -335,7 +371,8 @@ def test_native_command_is_always_bam_only_and_requires_complete_evidence(
         records, result = native.run_proposal(
             project, "d", tmp_path / "out", "repackage_unfixed"
         )
-        assert records == parse_bam(BAM) and result["bam_only"]
+        expected_bam = BAM.split("  PIN_PARAM")[0] if fault == "ref_only" else BAM
+        assert records == parse_bam(expected_bam) and result["bam_only"]
         assert pdb.read_bytes() == b"source"
 
 
@@ -355,6 +392,9 @@ def test_native_command_is_always_bam_only_and_requires_complete_evidence(
         "tool",
         "source",
         "exporter",
+        "scope_valid",
+        "scope_escape_first",
+        "scope_escape_second",
     ],
 )
 def test_native_snapshot_drift_rejects_but_proposal_variants_are_reported(
@@ -391,6 +431,10 @@ def test_native_snapshot_drift_rejects_but_proposal_variants_are_reported(
     )
     calls = {"read": 0, "proposal": 0, "graph": 0, "protected": 0}
     live, pins, graph = sample()
+    if fault and fault.startswith("scope_"):
+        from runtime.attribute_state import property_state, FROZEN
+
+        live[0]["frozen"] = property_state({}, {}, FROZEN)
 
     def read(*args):
         calls["read"] += 1
@@ -407,6 +451,10 @@ def test_native_snapshot_drift_rejects_but_proposal_variants_are_reported(
         records = parse_bam(BAM)
         if fault == "variant" and calls["proposal"] == 2:
             records[0]["refdes"]["after"] = "R3"
+        if (fault == "scope_escape_first" and calls["proposal"] == 1) or (
+            fault == "scope_escape_second" and calls["proposal"] == 2
+        ):
+            records[0]["scope"] = "d(other)"
         return records, {
             "executable_sha256": digest,
             "source_pdb_sha256": (
@@ -468,20 +516,26 @@ def test_native_snapshot_drift_rejects_but_proposal_variants_are_reported(
         "mode": "repackage_unfixed",
         "output_dir": str(tmp_path / "out"),
     }
+    if fault and fault.startswith("scope_"):
+        request["scope_sheet"] = "s"
     result = native.preview(
         None,
         request,
         lambda: "changed" if fault == "identity" and calls["proposal"] else "original",
         "original",
     )
-    if fault not in (None, "variant"):
+    if fault not in (None, "variant", "scope_valid"):
         assert not result["ok"] and result["schematic_update_outcome_unknown"]
+        if fault.startswith("scope_escape"):
+            assert result["error"]["kind"] == "backannotation_scope_escape"
         assert (
             result["project_write_attempted"]
             and not result["schematic_update_attempted"]
         )
     else:
-        assert result["ok"] and result["repeatability"]["identical"] == (fault is None)
+        assert result["ok"] and result["repeatability"]["identical"] == (
+            fault != "variant"
+        )
         if fault == "variant":
             assert (
                 "native_proposal_not_repeatable"

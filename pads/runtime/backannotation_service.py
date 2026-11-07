@@ -18,14 +18,26 @@ class Backannotation(Schematic):
                 (record["impact_id"], status, json.dumps(record)),
             )
 
-    def preview_impact(self, session_id, design, mode="add", baseline_id=None):
+    def preview_impact(
+        self, session_id, design, mode="add", baseline_id=None, scope_sheet=None
+    ):
         if mode not in ("add", "repackage_unfixed"):
             raise PadsError(
                 "invalid_backannotation_mode", "Select add or repackage_unfixed"
             )
         with self.lock():
+            if scope_sheet is not None and mode != "repackage_unfixed":
+                raise PadsError(
+                    "invalid_backannotation_scope",
+                    "Frozen sheet scope requires repackage_unfixed mode",
+                )
             request = self.base(
-                session_id, design, "*", "backannotation_preview", mode=mode
+                session_id,
+                design,
+                "*",
+                "backannotation_preview",
+                mode=mode,
+                scope_sheet=scope_sheet,
             )
             previous = None
             if baseline_id:
@@ -43,7 +55,11 @@ class Backannotation(Schematic):
                     )
                 previous = json.loads(row[1])
                 self.same_scope(previous, request)
-                if previous["design"] != design or previous["mode"] != mode:
+                if (
+                    previous["design"] != design
+                    or previous["mode"] != mode
+                    or previous.get("scope_sheet") != scope_sheet
+                ):
                     raise PadsError(
                         "check_scope_mismatch", "Impact baseline design/mode differs"
                     )
@@ -55,6 +71,7 @@ class Backannotation(Schematic):
                 "impact_id": impact_id,
                 "design": design,
                 "mode": mode,
+                "scope_sheet": scope_sheet,
                 "project": request["expected_path"],
                 "policy_sha256": request["policy_sha256"],
                 "request": request,

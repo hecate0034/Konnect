@@ -14,9 +14,21 @@ from .native_designer import call
 from .native_packaging import protected_files
 from .packaging import validate_output
 from .sessions import PadsError
+from .attribute_state import FROZEN, parse_batch, property_state, scope_guard
 
 
 def read_state(app, design, records=()):
+    manager = call(app, "GetCommonPropertyManager")
+    definition = call(manager, "GetPropertyDefinition", FROZEN)
+    if (
+        not definition
+        or call(definition, "GetId") != 23
+        or call(definition, "GetName") != FROZEN
+    ):
+        raise PadsError(
+            "attribute_state_unsupported",
+            "Native parameter 23 must resolve to Frozen Package",
+        )
     selected = {(r["scope"], r["uid"]): {p["name"] for p in r["pins"]} for r in records}
     rows, pins = [], []
     for i, component in enumerate(
@@ -39,6 +51,8 @@ def read_state(app, design, records=()):
             + ")"
         )
         uid = str(component.UID)
+        base = parse_batch(str(call(component, "GetBatchAttributes")))
+        oats = parse_batch(str(call(component, "GetBatchOats")))
         attrs = {}
         for name in ATTRIBUTES:
             a = call(component, "FindAttribute", name)
@@ -51,6 +65,22 @@ def read_state(app, design, records=()):
                     "effective": str(a.EitherValue),
                 }
             )
+            state = property_state(base, oats, name)
+            if a is not None and (
+                str(a.Value) != (state["base"] or "")
+                or str(a.InstanceValue) != (state["instance"] or "")
+                or str(a.EitherValue) != (state["effective"] or "")
+            ):
+                raise PadsError(
+                    "attribute_state_changed",
+                    "Batch presence and attribute values disagree",
+                )
+            if a is None and (state["base_present"] or state["instance_present"]):
+                raise PadsError(
+                    "attribute_state_unsupported",
+                    "Batch property has no readable native attribute",
+                )
+            attrs[name] = state
         rows.append(
             {
                 "scope": scope,
@@ -58,6 +88,7 @@ def read_state(app, design, records=()):
                 "path": str(call(component, "GetName", 0)),
                 "refdes": ref,
                 "attributes": attrs,
+                "frozen": property_state(base, oats, FROZEN),
             }
         )
         wanted = selected.get((scope, uid), set())
@@ -152,6 +183,13 @@ def run_proposal(project, design, output, mode):
                 log.read_bytes().decode("mbcs"),
             )
         )
+        counts.update(
+            (n, "0")
+            for n in re.findall(
+                r"There have been (\d+) reference designator changes\.",
+                log.read_bytes().decode("mbcs"),
+            )
+        )
         expected = (
             str(sum(r["refdes"] is not None for r in records)),
             str(sum(len(r["pins"]) for r in records)),
@@ -209,6 +247,11 @@ def preview(app, request, identity, initial):
             )
         protected = protected_files(root)
         before, _ = read_state(app, design)
+        scope = (
+            scope_guard(before, design, request["scope_sheet"])
+            if request.get("scope_sheet")
+            else None
+        )
         output = Path(request["output_dir"])
         graph, graph_evidence = export_round(database, design, output / "before")
         labels = parse_sct(
@@ -220,6 +263,11 @@ def preview(app, request, identity, initial):
         records, first = run_proposal(
             project, design, output / "first", request["mode"]
         )
+        if scope and any(r["scope"] != scope for r in records):
+            raise PadsError(
+                "backannotation_scope_escape",
+                "Native proposal changes an instance outside the selected sheet",
+            )
         observed, pins = read_state(app, design, records)
         if observed != before:
             raise PadsError(
@@ -230,6 +278,11 @@ def preview(app, request, identity, initial):
         repeated, second = run_proposal(
             project, design, output / "second", request["mode"]
         )
+        if scope and any(r["scope"] != scope for r in repeated):
+            raise PadsError(
+                "backannotation_scope_escape",
+                "Repeated proposal leaves the selected sheet",
+            )
         after, after_pins = read_state(app, design, records)
         after_graph, after_evidence = export_round(database, design, output / "after")
         after_labels = parse_sct(
@@ -271,6 +324,7 @@ def preview(app, request, identity, initial):
             "identity": initial,
             "impact": report,
             "proposal_records": records,
+            "scope_sheet": request.get("scope_sheet"),
             "repeatability": {
                 "identical": not variants,
                 "changed_instances": variants,

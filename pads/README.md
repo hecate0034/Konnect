@@ -9,13 +9,14 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.9.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.10.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
 connectivity/electrical native profiles, and selected global/hierarchical pin checks
 using fresh native netlist exports with baseline comparison, plus selected effective
-project-library pin mapping evidence and nonempty backannotation impact previews.
-There are 25 domain tools. Full ERC, PCB writes
+project-library pin mapping evidence, scoped nonempty backannotation impact previews,
+native override/fixed-state preimages, and complete closed-fixture checkpoints/restoration.
+There are 28 domain tools. Full ERC, PCB writes
 and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
@@ -626,7 +627,8 @@ See [P2 seventh acceptance](docs/p2g-acceptance.md).
 ## Nonempty backannotation impact preview (P2h)
 
 `preview_pads_backannotation` takes `session_id`, an existing `design`, optional
-`mode` (`add` by default, or `repackage_unfixed`), and optional `baseline_id`.
+`mode` (`add` by default, or `repackage_unfixed`), optional `baseline_id`, and
+optional `scope_sheet` (P2i, described below).
 It uses the configured test copy and always runs fixed native `-Add -NoFill -y`
 commands with private working PDBs. `repackage_unfixed` adds `-r` and can propose
 extensive renumbering and changes to package unit assignments. No arbitrary BAM,
@@ -668,11 +670,12 @@ blocker. It is never presented as the result a later native execution must repro
 The source design must already yield clean packaged SCT/Allegro baseline exports;
 this tool does not treat an unpackaged fallback export as a valid baseline.
 
-Before/after checks cover live instance identities and the three observed properties,
+Before/after checks cover live instance identities, native Frozen Package presence/value,
+and base/instance override presence and values for the three observed properties,
 the first proposal's affected physical pins, clean exported graphs/labels, tool hashes,
 application/project identity and protected library/PCB/PDB/configuration files.
 Changes reject the read and preserve failure evidence; uncertain outcomes invalidate
-the session. This does not check every geometric field or every fixed/override flag.
+the session. This does not check every geometric field or arbitrary properties.
 The packager writes auxiliary project reports and private PDB/output files, so this
 is a **no-schematic-update preflight**, not a filesystem read-only operation.
 
@@ -689,3 +692,68 @@ python pads/smoke_backannotation.py --server pads/server/target/debug/pads-autom
 
 See [P2 eighth acceptance](docs/p2h-acceptance.md). Stabilizing a bounded candidate and
 validating the missing restoration preimages must precede any nonempty execution.
+
+## Scoped candidates and complete fixture restoration (P2i)
+
+`preview_pads_backannotation` accepts `scope_sheet` only with `repackage_unfixed`.
+The selected root sheet must contain 1–16 existing instances; every other instance
+must already have effective `Frozen Package=Fix`, and no selected package may have
+units outside the sheet. Both complete native BAM results must stay in this scope.
+The tool rejects an escape; it never filters away unwanted changes or sets flags.
+Baseline comparisons include the selected sheet. This is verified on VX.2.4/COM 66.
+The native `-Block` option cannot be combined with `-r` on this installation.
+
+```json
+{"session_id":"<bound session>","design":"CORPORATE","mode":"repackage_unfixed","scope_sheet":"Powersupply"}
+```
+
+Native `GetBatchAttributes`/`GetBatchOats` now distinguish absent attributes, absent
+instance overrides, explicit empty overrides and nonempty overrides. Reports retain
+base/instance presence, visibility, values and effective value. Native parameter 23
+must resolve to `Frozen Package` in the loaded common property definitions. Empty
+and `1` values do not establish a fixed component; only `Fix` is accepted by this
+scope guard. Complete preimages remove their respective missing-evidence blockers,
+but do not enable nonempty execution or prove an inverse operation.
+
+Three new tools use only the configured disposable fixture and opaque record IDs:
+
+| Tool | Input | Effect |
+| --- | --- | --- |
+| `create_pads_fixture_checkpoint` | none | Copy the entire closed fixture and verify its content inventory |
+| `preview_pads_fixture_restore` | `checkpoint_id` | Record current/target digests and file/directory differences; expires in 10 minutes |
+| `execute_pads_fixture_restore` | `preview_id` | Verify inputs, stage the backup, retain the old directory, switch and verify the restored tree |
+
+All three refuse while Designer, Layout, standalone Cell Editor or Library Manager
+is running. They do not close applications. Stop concurrent native operations before
+using them; process checks are not a system-wide lock against externally launched
+editors. A disappearing file or changing directory is an error, not an ignored file.
+Wait for native cleanup and create a fresh preview; never blindly retry a consumed
+restore. The acceptance harness waits for two equal inventories after its owned editor exits.
+
+Checkpoints include all ordinary files (project database, PCB, copied library,
+configuration, reports and manifest) and empty directories. Every file is SHA-256
+checked. Limits are 10,000 files and 2 GiB; links/junctions/hard links are refused.
+This is a complete content-tree backup, not an OS image or an ACL/alternate-stream
+backup, and does not capture external libraries, registry settings or licenses.
+The existing prepared-fixture policy is a deployment guard, not a security boundary
+against someone editing its local policy/backup files.
+
+Restore first verifies fresh absolute sibling destinations. The original tree is
+renamed to a unique `fixture-retained-<preview_id>` directory; nothing is deleted.
+An interrupted/failed switch consumes the token and retains available versions for
+inspection. A failed second rename attempts to put the original directory back.
+Success invalidates active bindings and old executable/recovery records. Rebind
+after opening the restored project. The tool's `independent_reopen_verified=false`
+is intentional: byte verification and native reopening are separate checks.
+
+Acceptance preparation currently remains a developer-only operation: capture a
+closed checkpoint, open only that copy, record its original live properties/graph,
+then set the outside-page instance overrides to `Fix`. The public preview never
+performs this preparation. `smoke_checkpoint.py` consumes this prepared fixture,
+the original snapshots and checkpoint; it compares repeated candidates before/after
+reopening, changes one existing attribute, restores the full checkpoint and verifies
+properties/graph using a newly started Designer instance. Its optional
+`--resume-before-restore` is restricted to evidence stopped after the owned editor
+was released/closed and before any restore attempt; it never retries a mutation.
+
+See [P2 ninth acceptance](docs/p2i-acceptance.md) for native evidence and limitations.
