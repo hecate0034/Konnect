@@ -236,14 +236,22 @@ def test_disappearing_file_is_not_silently_omitted(context, monkeypatch):
     expect("checkpoint_source_changed", lambda: inventory(root))
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        PadsError("checkpoint_source_changed", "cleanup"),
+        FileNotFoundError("cleanup"),
+        PermissionError("native database still locked"),
+    ],
+)
 def test_acceptance_waits_for_stable_inventory_without_retrying_restore(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, failure
 ):
     import smoke_checkpoint as smoke
 
     values = iter(
         [
-            PadsError("checkpoint_source_changed", "cleanup"),
+            failure,
             {"digest": "one"},
             {"digest": "two"},
             {"digest": "two"},
@@ -259,6 +267,25 @@ def test_acceptance_waits_for_stable_inventory_without_retrying_restore(
     monkeypatch.setattr(smoke, "inventory", read)
     monkeypatch.setattr(smoke.time, "sleep", lambda seconds: None)
     assert smoke.settled_inventory(tmp_path) == {"digest": "two"}
+
+
+def test_restore_invalidates_bam_execution_plans(context):
+    checkpoints, root, edits, sid = fixture_service(context)
+    snapshot = checkpoints.create()
+    with edits.db() as db:
+        db.execute(
+            "CREATE TABLE bam_executions (id TEXT PRIMARY KEY,status TEXT,record TEXT)"
+        )
+        for status in ("ready", "executed", "verified", "failed"):
+            db.execute(
+                "INSERT INTO bam_executions VALUES (?,?,?)", (status, status, "{}")
+            )
+    preview = checkpoints.preview_restore(snapshot["checkpoint_id"])
+    checkpoints.execute_restore(preview["preview_id"])
+    with edits.db() as db:
+        assert {r[0] for r in db.execute("SELECT status FROM bam_executions")} == {
+            "invalidated"
+        }
 
 
 @pytest.mark.parametrize(

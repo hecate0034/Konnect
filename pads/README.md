@@ -9,14 +9,15 @@ The original KiCad executable and its installed configuration are not replaced.
 
 ## Current scope
 
-Version 0.10.0 provides read-only project sessions and bounded Designer test-copy
+Version 0.11.0 provides read-only project sessions and bounded Designer test-copy
 editing: property/position changes, reused component placement, straight and
 explicit multi-segment connections, guarded interior/corner branches, recovery, and
 connectivity/electrical native profiles, and selected global/hierarchical pin checks
 using fresh native netlist exports with baseline comparison, plus selected effective
 project-library pin mapping evidence, scoped nonempty backannotation impact previews,
-native override/fixed-state preimages, and complete closed-fixture checkpoints/restoration.
-There are 28 domain tools. Full ERC, PCB writes
+native override/fixed-state preimages, complete closed-fixture checkpoints/restoration,
+and hash-bound execution of a strictly limited BAM subset through native Designer APIs.
+There are 31 domain tools. Full ERC, PCB writes
 and library writes remain outside the verified scope.
 
 ## Installation diagnostics (P0)
@@ -757,3 +758,55 @@ properties/graph using a newly started Designer instance. Its optional
 was released/closed and before any restore attempt; it never retries a mutation.
 
 See [P2 ninth acceptance](docs/p2i-acceptance.md) for native evidence and limitations.
+
+## Approved-file native execution (P2j)
+
+This release can compile an approved BAM **subset** into explicit Designer COM
+setters. It does not claim a general Siemens BAM-file import API. The installed
+packager's `-b` option names an output file, not an input, and rerunning it is not
+an acceptable way to execute previously approved bytes. The new path never invokes
+the packager during execution. It parses the saved BAM, validates its SHA-256 and
+preimages, and applies only the supported reference/property operations in memory.
+
+| Tool | Inputs | Result |
+| --- | --- | --- |
+| `preview_pads_bam_execution` | `session_id`, `impact_id`, `checkpoint_id` | A private exact-byte copy, its SHA-256, complete observed/expected states and a 10-minute execution token |
+| `execute_pads_bam` | `preview_id` | One native application and exact live/page/graph readback; invalidates the binding |
+| `reopen_pads_bam` | fresh `session_id`, `preview_id` | Close/reopen and compare the recorded result; invalidates the binding again |
+
+The first executable scope is deliberately fixture-specific: `CORPORATE(Powersupply)`
+instances `$11I15`/C4, `$11I16`/C2 and `$11I17`/U12. Exactly these three records are
+required. Destination references must be unique, currently unused and retain their
+prefix. Shared units, pin changes, reference swaps/cycles, changed part identities,
+new attributes and actual fixed-flag deletions are refused. `Part Name` and
+`Part Label` assignments must repeat existing invisible base values without an
+existing instance override. They create six real instance overrides; equal effective
+values do not imply a no-op. Each `PARAM 23 DELETE` is accepted only when the fixed
+flag is verified absent in both base and instance, so those three commands are
+explicit no-ops. Other instances must already be fixed as required by P2i.
+
+The impact token is still not executable. Conversion checks the retained native
+file, repeatability, project/policy, native tool/PDB/exporter fingerprints and a
+complete valid checkpoint. Execution revalidates the approved bytes, current live
+state, whole selected sheet (including geometry/connectivity), full clean native
+graph, protected files, application identity, native binary and backup digest.
+After writing, it requires the exact projected result and unchanged protected files.
+Changing even a comment in the approved copy invalidates its token. No caller-supplied
+file, command, arbitrary property or COM member is accepted by these MCP schemas.
+
+These writes persist immediately and are not atomic. Any attempted/unknown write
+failure retains the plan/results and invalidates the session; it never retries the
+setters or automatically applies an inverse. Retain and inspect the copy, close the
+owned editor, then explicitly preview/execute the recorded complete checkpoint
+restore. Restoring a checkpoint also invalidates old BAM execution records.
+
+The checkpoint restores its recorded point in time, which can precede temporary
+outside-page freezing. It is not an automatically captured latest undo state. Public
+tools do not perform that scope preparation. Keep other users/tools from editing
+the fixture concurrently; preflight comparisons are not a global native transaction.
+
+`smoke_bam.py` consumes a prepared fixture and a reviewed execution-plan receipt,
+tests modified-file and replay refusal, creates a fresh plan from the unchanged
+original impact, executes/reopens it, restores the whole checkpoint, and starts a
+new Designer instance to compare original live properties, page geometry and graph.
+See [P2 tenth acceptance](docs/p2j-acceptance.md) for actual results and remaining limits.

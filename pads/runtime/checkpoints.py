@@ -317,7 +317,7 @@ class Checkpoints:
                 r[0]
                 for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
-            for name in ("edits", "packaging", "sheet_changes"):
+            for name in ("edits", "packaging", "sheet_changes", "bam_executions"):
                 if name in tables:
                     db.execute(
                         f"UPDATE {name} SET status='invalidated' WHERE status IN ('ready','executed','verified','failed','persistence_verified')"

@@ -34,7 +34,7 @@ def settled_inventory(fixture):
             if current == previous:
                 return current
             previous = current
-        except (FileNotFoundError, PadsError) as exc:
+        except (FileNotFoundError, PermissionError, PadsError) as exc:
             if isinstance(exc, PadsError) and exc.kind != "checkpoint_source_changed":
                 raise
             previous = None

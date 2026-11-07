@@ -61,6 +61,9 @@ fn catalogue() -> Vec<Tool> {
     ]});
     let sheet_name = json!({"type":"string","minLength":1,"maxLength":256});
     vec![
+        tool("preview_pads_bam_execution", "edit", "Compile a repeatable three-instance fixture impact into a hash-bound native COM execution plan, requiring a verified complete checkpoint. No generic BAM importer, pin edits, swaps or production writes.", json!({"session_id":session,"impact_id":session,"checkpoint_id":session}), json!(["session_id","impact_id","checkpoint_id"])),
+        tool("execute_pads_bam", "edit", "Consume one approved BAM subset execution preview. Recheck bytes, state, sources and checkpoint, apply native reference/property setters and read back the exact planned result. No regeneration or automatic inverse; rebind afterward.", json!({"preview_id":session}), json!(["preview_id"])),
+        tool("reopen_pads_bam", "edit", "Close/reopen an executed BAM subset in the configured fixture and verify its recorded live, page and native graph result. Requires a fresh bound session and invalidates it afterward.", json!({"session_id":session,"preview_id":session}), json!(["session_id","preview_id"])),
         tool("create_pads_fixture_checkpoint", "edit", "Create a complete verified checkpoint of the configured disposable fixture. PADS editors must already be closed. Does not claim independent reopen verification.", json!({}), json!([])),
         tool("preview_pads_fixture_restore", "edit", "Preview complete configured-fixture restoration from a local checkpoint while PADS editors are closed. Preserves current tree in quarantine; no arbitrary paths.", json!({"checkpoint_id":session}), json!(["checkpoint_id"])),
         tool("execute_pads_fixture_restore", "edit", "Consume one closed-fixture restore preview. Verify all files, retain the old tree, restore the checkpoint, invalidate old bindings/previews. Reopen verification is separate.", json!({"preview_id":session}), json!(["preview_id"])),
@@ -140,6 +143,9 @@ impl Worker {
             "inspect_pads_logical_connectivity",
             "inspect_pads_pin_mapping",
             "preview_pads_backannotation",
+            "preview_pads_bam_execution",
+            "execute_pads_bam",
+            "reopen_pads_bam",
             "create_pads_fixture_checkpoint",
             "preview_pads_fixture_restore",
             "execute_pads_fixture_restore",
@@ -235,7 +241,7 @@ fn handle(
     let mut changed = false;
     let result = match method.unwrap() {
         "initialize" => {
-            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.10.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
+            json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"pads-automation","version":"0.11.0"},"instructions":"P2 development build: bounded Designer edits require a configured disposable fixture and a single-use preview. Sheet changes check recorded wire geometry and allow guarded recovery. Native writes persist immediately. This is not full ERC or production editing support."})
         }
         "ping" => json!({}),
         "tools/list" => {
@@ -495,6 +501,30 @@ mod tests {
             assert!(schema.is_valid(&args));
             args["path"] = json!("D:/arbitrary");
             assert!(!schema.is_valid(&args));
+        }
+    }
+    #[test]
+    fn bam_execution_schemas_require_saved_ids_and_reject_arbitrary_files() {
+        let tools = catalogue();
+        for (name, args) in [
+            (
+                "preview_pads_bam_execution",
+                json!({"session_id":"a".repeat(32),"impact_id":"b".repeat(32),"checkpoint_id":"c".repeat(32)}),
+            ),
+            ("execute_pads_bam", json!({"preview_id":"a".repeat(32)})),
+            (
+                "reopen_pads_bam",
+                json!({"session_id":"a".repeat(32),"preview_id":"b".repeat(32)}),
+            ),
+        ] {
+            let schema = &tools.iter().find(|t| t.name == name).unwrap().validator;
+            assert!(schema.is_valid(&args));
+            assert!(!schema.is_valid(&json!({})));
+            for key in ["file", "bam", "script", "force", "path", "command"] {
+                let mut bad = args.clone();
+                bad[key] = json!("arbitrary");
+                assert!(!schema.is_valid(&bad));
+            }
         }
     }
     #[test]

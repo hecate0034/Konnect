@@ -16,6 +16,11 @@ from runtime.schematic import Schematic
 
 
 def dispatch(name, args, sdd, state):
+    if name in ('preview_pads_bam_execution','execute_pads_bam','reopen_pads_bam'):
+        from runtime.bam_service import BamExecution
+        service=BamExecution(sdd,state)
+        if name=='preview_pads_bam_execution': return service.preview_execution(args['session_id'],args['impact_id'],args['checkpoint_id'])
+        return service.run_execution(args['preview_id'],args.get('session_id'),reopen=name=='reopen_pads_bam')
     if name in ('create_pads_fixture_checkpoint','preview_pads_fixture_restore','execute_pads_fixture_restore'):
         from runtime.checkpoints import Checkpoints
         checkpoints=Checkpoints(state)
@@ -90,6 +95,8 @@ def dispatch(name, args, sdd, state):
             impact_evidence=json.loads(impact_path.read_text(encoding='utf-8')) if impact_path.is_file() else None
             checkpoint_path=state/'evidence'/f'p2i-acceptance-{domain}.json'
             checkpoint_evidence=json.loads(checkpoint_path.read_text(encoding='utf-8')) if checkpoint_path.is_file() else None
+            bam_path=state/'evidence'/f'p2j-acceptance-{domain}.json'
+            bam_evidence=json.loads(bam_path.read_text(encoding='utf-8')) if bam_path.is_file() else None
             capabilities.append({'domain': domain, 'activation_evidence': evidence,
                                  'read_project_implementation_available': domain in ('designer', 'layout'),
                                  'recorded_read_acceptance': read_evidence,
@@ -112,6 +119,8 @@ def dispatch(name, args, sdd, state):
                                  'recorded_backannotation_impact_acceptance':impact_evidence,
                                  'scoped_backannotation_and_checkpoint_verified':bool(checkpoint_evidence and checkpoint_evidence.get('status')=='passed'),
                                  'recorded_checkpoint_acceptance':checkpoint_evidence,
+                                 'approved_bam_execution_verified':bool(bam_evidence and bam_evidence.get('status')=='passed'),
+                                 'recorded_bam_execution_acceptance':bam_evidence,
                                  'verified_edit_scope': {'component': edit_evidence.get('target'),
                                      'attribute': 'Description instance value', 'position_unit': '0.01_inch',
                                      'persistence': edit_evidence.get('persistence'), 'project': edit_evidence.get('project')}
@@ -146,7 +155,7 @@ def main():
         result = dispatch(request['name'], request['arguments'], Path(sys.argv[1]), Path(sys.argv[2]))
         print(json.dumps(result if result.get('ok') is False else {'ok': True, 'data': result}, ensure_ascii=False))
     except PadsError as exc:
-        possible_write = request.get('name') in ('execute_pads_fixture_restore', 'preview_pads_backannotation', 'execute_pads_component_edit', 'reopen_pads_edit',
+        possible_write = request.get('name') in ('execute_pads_bam', 'reopen_pads_bam', 'execute_pads_fixture_restore', 'preview_pads_backannotation', 'execute_pads_component_edit', 'reopen_pads_edit',
                                                'execute_pads_schematic_change','reopen_pads_schematic_change')
         print(json.dumps({'ok': False, 'error': {'kind': exc.kind, 'message': str(exc)},
                           'project_write_attempted': None if possible_write else False}, ensure_ascii=False))

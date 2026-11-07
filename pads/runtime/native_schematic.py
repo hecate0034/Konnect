@@ -378,6 +378,10 @@ def operate(request):
                 )
         library_sha = fingerprint(Path(data.CentralLibraryPath))
         design, sheet = request["design"], request["sheet"]
+        if request["action"] in ("bam_plan", "bam_apply", "bam_reopen", "bam_verify"):
+            from runtime.native_bam_execution import operate as bam_operation
+
+            return bam_operation(app, request, identity, initial)
         if request["action"] == "backannotation_preview":
             from runtime.native_backannotation import preview
 
